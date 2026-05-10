@@ -1,0 +1,14 @@
+# .NET Core
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+
+# Publish
+publish/
+[Pp]ublish/
+
+# App local caches
+fingerprint_cache.json
+settings.json
+lang_template.json
