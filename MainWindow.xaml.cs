@@ -5,9 +5,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Reflection; 
-using System.Runtime.InteropServices;
-using System.Text;
+using System.Text;                  // 💡 補回 Encoding
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -15,7 +13,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;         
 using System.Windows.Media.Imaging; 
-using Microsoft.Win32;
+using Microsoft.Win32;              // 💡 補回 OpenFolderDialog
 using System.Text.Json;
 using System.Threading.Channels; 
 using Microsoft.WindowsAPICodePack.Shell; 
@@ -26,40 +24,24 @@ namespace FastDupeFinder
     {
         public ObservableCollection<DupeFileItem> Duplicates { get; set; } = new();
 
-        // 核心記憶體暫存區
         private List<DupeFileItem> _cachedScanResults = new();
         private bool _isScanning = false;
         private Guid _currentPreviewId;
 
-        // 取消權杖機制，用來隨時終止管線
         private CancellationTokenSource? _cancellationTokenSource;
 
-        // 特徵快取資料庫與毒藥快取
         private ConcurrentDictionary<string, List<VideoFingerprint>> _fingerprintCache = new();
         private ConcurrentDictionary<string, bool> _badCache = new();
 
-        // 泛用背景任務佇列系統 (修復/升級共用)
         private readonly Channel<DupeFileItem> _taskQueue = Channel.CreateUnbounded<DupeFileItem>();
         private int _taskPendingCount = 0;
 
-        private string _appVersion = "1.0.0"; // 儲存版本號
-
-        // i18n 快速存取方法
+        private string _appVersion = "1.0.0";
         private string Loc(string key, string def) => I18nManager.Instance.GetString(key, def);
-
-        private readonly string[] _supportedVideoExts = {
-            ".mp4", ".mkv", ".avi", ".wmv", ".mov", ".ts", ".m2ts",
-            ".mts", ".vob", ".mpg", ".mpeg", ".m4v", ".3gp", ".divx", ".flv", ".rmvb"
-        };
-
-        // 需要被標記為淺橘色的「格式現代化」對象
-        private readonly string[] _legacyVideoExts = {
-            ".vob", ".avi", ".3gp", ".wmv", ".ts", ".m2ts", ".mts", ".mpg", ".mpeg", ".divx", ".flv", ".rmvb", ".mov"
-        };
 
         public MainWindow()
         {
-            I18nManager.Instance.Init(); // 初始化 i18n
+            I18nManager.Instance.Init();
             InitializeComponent();
             this.WindowState = WindowState.Maximized;
             
@@ -67,18 +49,13 @@ namespace FastDupeFinder
 
             this.Loaded += MainWindow_Loaded;
             this.Closing += MainWindow_Closing;
-            
-            // 監聽語言切換事件，手動更新 Code-Behind 的動態字串
             I18nManager.Instance.LanguageChanged += OnLanguageChanged;
         }
 
         private void OnLanguageChanged()
         {
             this.Title = Loc("WindowTitle", "渡川 Moses - 快速重複影片檢索工具") + $" (v{_appVersion})";
-            if (!_isScanning && _taskPendingCount == 0)
-            {
-                StatusText.Text = Loc("StatusReady", "✅ 系統就緒，準備掃描。");
-            }
+            if (!_isScanning && _taskPendingCount == 0) StatusText.Text = Loc("StatusReady", "✅ 系統就緒，準備掃描。");
             UpdateGlobalUIState();
 
             if (FileListView.ContextMenu != null)
@@ -88,13 +65,12 @@ namespace FastDupeFinder
                 ((MenuItem)FileListView.ContextMenu.Items[3]).Header = Loc("MenuOpenFolder", "📂 開啟檔案位置");
                 ((MenuItem)FileListView.ContextMenu.Items[4]).Header = Loc("MenuDelete", "🗑️ 刪除選取的檔案");
             }
-            
-            FileListView.Items.Refresh(); // 語言切換這類全域更新保留 Refresh
+            FileListView.Items.Refresh();
         }
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
-            var version = Assembly.GetExecutingAssembly().GetName().Version;
+            var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
             if (version != null) _appVersion = $"{version.Major}.{version.Minor}.{version.Build}";
             this.Title = Loc("WindowTitle", "渡川 Moses - 快速重複影片檢索工具") + $" (v{_appVersion})";
 
@@ -104,7 +80,6 @@ namespace FastDupeFinder
             
             _ = Task.Run(BackgroundWorkerLoopAsync);
 
-            // 動態建立滑鼠右鍵選單
             var ctxMenu = new ContextMenu();
             var repairMenu = new MenuItem { Header = Loc("MenuRepair", "🛠️ 嘗試斷尾修復 (容許損失 < 5%)") };
             repairMenu.Click += RepairSelected_Click;
@@ -139,19 +114,16 @@ namespace FastDupeFinder
 
             var aboutWindow = new Window
             {
-                Title = Loc("AboutTitle", "關於 FastDupeFinder & 作者"),
-                Width = 900,  Height = 700, 
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner = this, ResizeMode = ResizeMode.NoResize,
+                Title = Loc("AboutTitle", "關於 FastDupeFinder & 作者"), Width = 900, Height = 700, 
+                WindowStartupLocation = WindowStartupLocation.CenterOwner, Owner = this, ResizeMode = ResizeMode.NoResize,
                 Background = new SolidColorBrush(Color.FromRgb(248, 249, 250))
             };
 
             aboutWindow.Content = new TextBox
             {
-                Text = aboutText, Margin = new Thickness(20),
-                TextWrapping = TextWrapping.Wrap, FontFamily = new FontFamily("Microsoft JhengHei"),
-                FontSize = 14, IsReadOnly = true, BorderThickness = new Thickness(0),
-                Background = Brushes.Transparent, VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+                Text = aboutText, Margin = new Thickness(20), TextWrapping = TextWrapping.Wrap,
+                FontFamily = new FontFamily("Microsoft JhengHei"), FontSize = 14, IsReadOnly = true,
+                BorderThickness = new Thickness(0), Background = Brushes.Transparent, VerticalScrollBarVisibility = ScrollBarVisibility.Auto
             };
             aboutWindow.ShowDialog();
         }
@@ -185,61 +157,38 @@ namespace FastDupeFinder
             catch { }
         }
 
-        private string GetFileHeaderHash(string filePath)
-        {
-            for (int i = 0; i < 4; i++) 
-            {
-                try
-                {
-                    using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                    byte[] buffer = new byte[8192];
-                    int totalRead = 0;
-                    while (totalRead < buffer.Length)
-                    {
-                        int bytesRead = fs.Read(buffer, totalRead, buffer.Length - totalRead);
-                        if (bytesRead == 0) break; 
-                        totalRead += bytesRead;
-                    }
-                    using var md5 = System.Security.Cryptography.MD5.Create();
-                    return BitConverter.ToString(md5.ComputeHash(buffer, 0, totalRead)).Replace("-", "");
-                }
-                catch { if (i < 3) Thread.Sleep(250); }
-            }
-            return "ERR_" + Guid.NewGuid().ToString("N"); 
-        }
-
         // =========================================================================================
-        // UI 狀態防呆調度系統 (嚴格保護模式)
+        // UI 狀態防呆調度系統
         // =========================================================================================
         private void UpdateGlobalUIState()
         {
             bool isQueueRunning = _taskPendingCount > 0;
             bool isIdle = !_isScanning && !isQueueRunning; 
 
-            PathTextBox.IsEnabled = isIdle;
-            MinSizeTextBox.IsEnabled = isIdle;
-            SubDirCheckBox.IsEnabled = isIdle;
-            MinLengthTextBox.IsEnabled = isIdle;
-            ExcludePathTextBox.IsEnabled = isIdle;
-            DeleteBtn.IsEnabled = isIdle;
+            if (this.FindName("PathTextBox") is TextBox pt) pt.IsEnabled = isIdle;
+            if (this.FindName("MinSizeTextBox") is TextBox mst) mst.IsEnabled = isIdle;
+            if (this.FindName("SubDirCheckBox") is CheckBox sdc) sdc.IsEnabled = isIdle;
+            if (this.FindName("MinLengthTextBox") is TextBox minLenTb) minLenTb.IsEnabled = isIdle;
+            if (this.FindName("ExcludePathTextBox") is TextBox excludeTb) excludeTb.IsEnabled = isIdle;
+            if (this.FindName("DeleteBtn") is Button delBtn) delBtn.IsEnabled = isIdle;
 
-            if (_isScanning) {
-                ScanBtn.IsEnabled = true; 
-                ScanBtn.Content = Loc("BtnStopScan", "🛑 停止掃描");
-                try { ScanBtn.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFFFD6D6")); } catch { }
-            } else if (isQueueRunning) {
-                ScanBtn.IsEnabled = false; 
-                ScanBtn.Content = Loc("BtnScan", "🔍 開始掃描");
-                try { ScanBtn.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFEEEEEE")); } catch { }
-            } else {
-                ScanBtn.IsEnabled = true;
-                ScanBtn.Content = _cachedScanResults.Count > 0 ? Loc("BtnRescan", "🔍 重新掃描") : Loc("BtnScan", "🔍 開始掃描");
-                try { ScanBtn.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFFFEBF2")); } catch { }
+            if (this.FindName("ScanBtn") is Button scanBtn) {
+                if (_isScanning) {
+                    scanBtn.IsEnabled = true; 
+                    scanBtn.Content = Loc("BtnStopScan", "🛑 停止掃描");
+                    try { scanBtn.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFFFD6D6")); } catch { }
+                } else if (isQueueRunning) {
+                    scanBtn.IsEnabled = false; 
+                    scanBtn.Content = Loc("BtnScan", "🔍 開始掃描");
+                    try { scanBtn.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFEEEEEE")); } catch { }
+                } else {
+                    scanBtn.IsEnabled = true;
+                    scanBtn.Content = _cachedScanResults.Count > 0 ? Loc("BtnRescan", "🔍 重新掃描") : Loc("BtnScan", "🔍 開始掃描");
+                    try { scanBtn.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFFFEBF2")); } catch { }
+                }
             }
 
-            if (FileListView.SelectedItem is DupeFileItem selected) {
-                UpdatePreviewButtonsState(selected);
-            }
+            if (FileListView.SelectedItem is DupeFileItem selected) UpdatePreviewButtonsState(selected);
             
             if (FileListView.ContextMenu != null) {
                 foreach(var item in FileListView.ContextMenu.Items) {
@@ -252,27 +201,31 @@ namespace FastDupeFinder
         {
             if (targetItem == null)
             {
-                UpgradeBtn.Visibility = Visibility.Collapsed;
-                RepairBtn.Visibility = Visibility.Collapsed;
+                if (this.FindName("UpgradeBtn") is Button uBtn) uBtn.Visibility = Visibility.Collapsed;
+                if (this.FindName("RepairBtn") is Button rBtn) rBtn.Visibility = Visibility.Collapsed;
                 return;
             }
 
             if (targetItem.IsFailed)
             {
                 if (targetItem.IsFormatUpgradeNeeded) {
-                    UpgradeBtn.Visibility = Visibility.Visible; 
-                    UpgradeBtn.IsEnabled = !targetItem.IsUpgrading;
-                    RepairBtn.Visibility = Visibility.Collapsed;
+                    if (this.FindName("UpgradeBtn") is Button ub) { 
+                        ub.Visibility = Visibility.Visible; 
+                        ub.IsEnabled = !targetItem.IsUpgrading; 
+                    }
+                    if (this.FindName("RepairBtn") is Button rb) rb.Visibility = Visibility.Collapsed;
                 } else {
-                    UpgradeBtn.Visibility = Visibility.Collapsed;
-                    RepairBtn.Visibility = Visibility.Visible; 
-                    RepairBtn.IsEnabled = !targetItem.IsRepairing; 
+                    if (this.FindName("UpgradeBtn") is Button ub) ub.Visibility = Visibility.Collapsed;
+                    if (this.FindName("RepairBtn") is Button rb) { 
+                        rb.Visibility = Visibility.Visible; 
+                        rb.IsEnabled = !targetItem.IsRepairing; 
+                    }
                 }
             }
             else
             {
-                UpgradeBtn.Visibility = Visibility.Collapsed;
-                RepairBtn.Visibility = Visibility.Collapsed;
+                if (this.FindName("UpgradeBtn") is Button ub) ub.Visibility = Visibility.Collapsed;
+                if (this.FindName("RepairBtn") is Button rb) rb.Visibility = Visibility.Collapsed;
             }
         }
 
@@ -288,11 +241,11 @@ namespace FastDupeFinder
 
                     if (settings != null)
                     {
-                        PathTextBox.Text = settings.TargetPaths;
-                        ExcludePathTextBox.Text = settings.ExcludePaths;
-                        SubDirCheckBox.IsChecked = settings.IncludeSubDir;
-                        MinSizeTextBox.Text = settings.MinSize;
-                        MinLengthTextBox.Text = settings.MinLength;
+                        if (this.FindName("PathTextBox") is TextBox pt) pt.Text = settings.TargetPaths;
+                        if (this.FindName("ExcludePathTextBox") is TextBox et) et.Text = settings.ExcludePaths;
+                        if (this.FindName("SubDirCheckBox") is CheckBox sc) sc.IsChecked = settings.IncludeSubDir;
+                        if (this.FindName("MinSizeTextBox") is TextBox mt) mt.Text = settings.MinSize;
+                        if (this.FindName("MinLengthTextBox") is TextBox mlt) mlt.Text = settings.MinLength;
                         return;
                     }
                 }
@@ -307,11 +260,11 @@ namespace FastDupeFinder
             {
                 var settings = new AppSettings
                 {
-                    TargetPaths = PathTextBox.Text.Trim(),
-                    ExcludePaths = ExcludePathTextBox.Text.Trim(),
-                    IncludeSubDir = SubDirCheckBox.IsChecked ?? true,
-                    MinSize = MinSizeTextBox.Text.Trim(),
-                    MinLength = MinLengthTextBox.Text.Trim()
+                    TargetPaths = (this.FindName("PathTextBox") as TextBox)?.Text?.Trim() ?? "",
+                    ExcludePaths = (this.FindName("ExcludePathTextBox") as TextBox)?.Text?.Trim() ?? "",
+                    IncludeSubDir = (this.FindName("SubDirCheckBox") as CheckBox)?.IsChecked ?? true,
+                    MinSize = (this.FindName("MinSizeTextBox") as TextBox)?.Text?.Trim() ?? "100",
+                    MinLength = (this.FindName("MinLengthTextBox") as TextBox)?.Text?.Trim() ?? "3"
                 };
 
                 string configPath = Path.Combine(AppContext.BaseDirectory, "settings.json");
@@ -325,38 +278,7 @@ namespace FastDupeFinder
             List<string> availablePaths = new List<string>();
             if (Directory.Exists("D:\\")) availablePaths.Add("D:\\");
             if (Directory.Exists("E:\\")) availablePaths.Add("E:\\");
-            PathTextBox.Text = availablePaths.Count > 0 ? string.Join("; ", availablePaths) : (Directory.Exists("C:\\") ? "C:\\" : "");
-        }
-
-        private bool IsFileBadOrDownloading(string filePath)
-        {
-            try
-            {
-                using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-                long length = fs.Length;
-                if (length < 1024 * 1024) return false;
-
-                byte[] buffer = new byte[8192];
-                fs.Seek(-8192, SeekOrigin.End);
-                int tailRead = fs.Read(buffer, 0, 8192);
-                if (tailRead > 0)
-                {
-                    bool allZeros = true;
-                    for (int i = 0; i < tailRead; i++)
-                    {
-                        if (buffer[i] != 0) { allZeros = false; break; }
-                    }
-                    if (allZeros) return true; 
-                }
-                return false;
-            }
-            catch { return true; }
-        }
-
-        private bool IsFileInUse(string filePath)
-        {
-            try { using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read); return false; }
-            catch { return true; }
+            if (this.FindName("PathTextBox") is TextBox pt) pt.Text = availablePaths.Count > 0 ? string.Join("; ", availablePaths) : (Directory.Exists("C:\\") ? "C:\\" : "");
         }
 
         // =========================================================================================
@@ -378,7 +300,11 @@ namespace FastDupeFinder
                 else if (item.IsRepairing) await ProcessRepairItemAsync(item);
 
                 await Application.Current.Dispatcher.InvokeAsync(() => {
+                    item.IsRepairing = false;
+                    item.IsUpgrading = false;
+
                     if (FileListView.SelectedItem is DupeFileItem selected && selected == item) UpdatePreviewButtonsState(selected);
+                    
                     if (pending == 0)
                     {
                         StatusText.Text = Loc("StatusQueueDone", "✅ 所有背景佇列已全數處理完畢！");
@@ -390,7 +316,7 @@ namespace FastDupeFinder
 
         private async Task<bool> ApplyRecoveredFileAsync(DupeFileItem item, string tempPath, string finalPath, string successMsg, double? maxLossPercentage = null)
         {
-            var newMeta = await ExtractMetadataAsync(tempPath, CancellationToken.None, skipFfmpegFallback: false);
+            var newMeta = await FileHelper.ExtractMetadataAsync(tempPath, CancellationToken.None, skipFfmpegFallback: false);
             if (newMeta != null && newMeta.Duration.TotalSeconds > 0)
             {
                 if (maxLossPercentage.HasValue)
@@ -439,7 +365,7 @@ namespace FastDupeFinder
             string name = Path.GetFileNameWithoutExtension(item.FilePath);
             string tempOutPath = Path.Combine(dir, $"{name}_upgrading.mp4");
 
-            bool success = await RunFFmpegCommandAsync($"-err_detect ignore_err -i \"{item.FilePath}\" -c copy -y \"{tempOutPath}\"", CancellationToken.None);
+            bool success = await FFmpegHelper.RunCommandAsync($"-err_detect ignore_err -i \"{item.FilePath}\" -c copy -y \"{tempOutPath}\"", CancellationToken.None);
             bool isValid = success && File.Exists(tempOutPath) && new FileInfo(tempOutPath).Length > 1024;
 
             if (!isValid)
@@ -448,7 +374,7 @@ namespace FastDupeFinder
                 await Application.Current.Dispatcher.InvokeAsync(() => StatusText.Text = string.Format(Loc("StatusReencoding", "🔄 換殼失敗，正在進行重新編碼: {0}..."), Path.GetFileName(item.FilePath)));
 
                 string reencodeArgs = $"-err_detect ignore_err -i \"{item.FilePath}\" -c:v libx264 -preset veryfast -crf 23 -c:a aac -b:a 128k -y \"{tempOutPath}\"";
-                success = await RunFFmpegCommandAsync(reencodeArgs, CancellationToken.None);
+                success = await FFmpegHelper.RunCommandAsync(reencodeArgs, CancellationToken.None);
                 isValid = success && File.Exists(tempOutPath) && new FileInfo(tempOutPath).Length > 1024;
             }
 
@@ -461,8 +387,6 @@ namespace FastDupeFinder
                 await ApplyRecoveredFileAsync(item, tempOutPath, finalPath, Loc("StatusUpgradeDone", "✨ 成功升級為現代 MP4 格式"));
             }
             else item.ErrorMessage = Loc("ErrUpgradeFailed", "升級失敗 (檔案嚴重損毀或不支援)");
-
-            item.IsUpgrading = false;
         }
 
         private async Task ProcessRepairItemAsync(DupeFileItem item)
@@ -473,26 +397,13 @@ namespace FastDupeFinder
             string ext = Path.GetExtension(item.FilePath);
             string tempPath = Path.Combine(dir, $"{name}_repaired{ext}");
 
-            bool success = await RunFFmpegCommandAsync($"-err_detect ignore_err -i \"{item.FilePath}\" -c copy -y \"{tempPath}\"", CancellationToken.None);
+            bool success = await FFmpegHelper.RunCommandAsync($"-err_detect ignore_err -i \"{item.FilePath}\" -c copy -y \"{tempPath}\"", CancellationToken.None);
             
             if (success && File.Exists(tempPath) && new FileInfo(tempPath).Length > 1024)
             {
                 await ApplyRecoveredFileAsync(item, tempPath, item.FilePath, Loc("StatusRepairDone", "🛠️ 成功切除尾部 {0:F1}% (修復完成)"), 5.0);
             }
             else item.ErrorMessage = Loc("ErrRepairLocked", "修復失敗 (檔案嚴重損毀或被鎖定)");
-
-            item.IsRepairing = false;
-        }
-
-        private async Task<bool> RunFFmpegCommandAsync(string args, CancellationToken ct)
-        {
-            string ffmpegPath = Path.Combine(AppContext.BaseDirectory, "ffmpeg.exe");
-            if (!File.Exists(ffmpegPath)) return false;
-
-            var processInfo = new ProcessStartInfo { FileName = ffmpegPath, Arguments = args, UseShellExecute = false, CreateNoWindow = true };
-            using var process = new Process { StartInfo = processInfo, EnableRaisingEvents = true };
-            try { process.Start(); await process.WaitForExitAsync(ct); return process.ExitCode == 0; }
-            catch { return false; }
         }
 
         // =========================================================================================
@@ -543,8 +454,8 @@ namespace FastDupeFinder
                 bool valid = isUpgrade ? item.IsFormatUpgradeNeeded : (item.IsFailed && !item.IsFormatUpgradeNeeded);
                 if (!valid || !File.Exists(item.FilePath)) return;
 
-                if (isUpgrade) UpgradeBtn.IsEnabled = false;
-                else RepairBtn.IsEnabled = false;
+                if (isUpgrade) { if (this.FindName("UpgradeBtn") is Button u) u.IsEnabled = false; }
+                else { if (this.FindName("RepairBtn") is Button r) r.IsEnabled = false; }
 
                 EnqueueTasks(new List<DupeFileItem> { item }, isUpgrade);
                 UpdateGlobalUIState();
@@ -569,12 +480,13 @@ namespace FastDupeFinder
                 {
                     _cancellationTokenSource.Cancel();
                     StatusText.Text = Loc("StatusStopping", "⏳ 正在停止管線，請稍候...");
-                    ScanBtn.IsEnabled = false;
+                    if (this.FindName("ScanBtn") is Button scanBtn) scanBtn.IsEnabled = false;
                 }
                 return;
             }
 
-            if (!int.TryParse(MinLengthTextBox.Text.Trim(), out int minLength) || minLength < 3)
+            string minLenText = (this.FindName("MinLengthTextBox") as TextBox)?.Text?.Trim() ?? "3";
+            if (!int.TryParse(minLenText, out int minLength) || minLength < 3)
             {
                 MessageBox.Show(Loc("MsgMinLenErr", "「最短長度」必須設定為至少 3 分鐘！\n這能確保不會比對到無意義的零碎短片。"), Loc("TitleSettingErr", "設定錯誤"), MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
@@ -584,7 +496,8 @@ namespace FastDupeFinder
 
         private async void ExecuteScanCore()
         {
-            if (_isScanning || string.IsNullOrWhiteSpace(PathTextBox.Text)) return;
+            string pathText = (this.FindName("PathTextBox") as TextBox)?.Text ?? "";
+            if (_isScanning || string.IsNullOrWhiteSpace(pathText)) return;
 
             SaveSettings();
 
@@ -599,11 +512,11 @@ namespace FastDupeFinder
             ReleasePreviewMemory();
             StatusText.Text = Loc("StatusScanning", "⏳ 啟動雙層限流管線掃描...");
 
-            string searchPath = PathTextBox.Text.Trim();
-            string excludePath = ExcludePathTextBox.Text.Trim();
-            bool includeSub = SubDirCheckBox.IsChecked == true;
-            string minSizeStr = MinSizeTextBox.Text.Trim();
-            string minLengthStr = MinLengthTextBox.Text.Trim();
+            string searchPath = pathText.Trim();
+            string excludePath = (this.FindName("ExcludePathTextBox") as TextBox)?.Text?.Trim() ?? "";
+            bool includeSub = (this.FindName("SubDirCheckBox") as CheckBox)?.IsChecked == true;
+            string minSizeStr = (this.FindName("MinSizeTextBox") as TextBox)?.Text?.Trim() ?? "100";
+            string minLengthStr = (this.FindName("MinLengthTextBox") as TextBox)?.Text?.Trim() ?? "3";
 
             Stopwatch sw = Stopwatch.StartNew();
 
@@ -771,12 +684,12 @@ namespace FastDupeFinder
                             {
                                 if (ct.IsCancellationRequested) break;
 
-                                if (_supportedVideoExts.Any(ext => file.EndsWith(ext, StringComparison.OrdinalIgnoreCase)))
+                                if (AppConstants.SupportedVideoExts.Any(ext => file.EndsWith(ext, StringComparison.OrdinalIgnoreCase)))
                                 {
                                     var fi = new FileInfo(file);
                                     if (fi.Length >= minSizeBytes)
                                     {
-                                        if (IsFileInUse(file))
+                                        if (FileHelper.IsFileInUse(file))
                                         {
                                             Interlocked.Increment(ref statsSkippedLocked);
                                             long sz = 0;
@@ -807,7 +720,7 @@ namespace FastDupeFinder
                         long sz = 0;
                         try { sz = new FileInfo(file).Length; } catch { return; }
 
-                        string cacheKey = $"{sz}_{GetFileHeaderHash(file)}_v2";
+                        string cacheKey = $"{sz}_{FileHelper.GetFileHeaderHash(file)}_v2";
 
                         if (_badCache.ContainsKey(cacheKey))
                         {
@@ -820,7 +733,7 @@ namespace FastDupeFinder
                         }
 
                         bool isCached = _fingerprintCache.TryGetValue(cacheKey, out var cachedFps);
-                        var item = await ExtractMetadataAsync(file, token, skipFfmpegFallback: isCached);
+                        var item = await FileHelper.ExtractMetadataAsync(file, token, skipFfmpegFallback: isCached);
 
                         if (item != null)
                         {
@@ -847,7 +760,7 @@ namespace FastDupeFinder
                         else
                         {
                             string ext = Path.GetExtension(file).ToLower();
-                            if (_legacyVideoExts.Contains(ext)) {
+                            if (AppConstants.LegacyVideoExts.Contains(ext)) {
                                 failedFilesBag.Add(new DupeFileItem { FilePath = file, Size = sz, IsFailed = true, IsFormatUpgradeNeeded = true, ErrorMessage = Loc("ErrLegacyFormat", "⚠️ 老舊格式 (需升級才能解析)") });
                             } else {
                                 failedFilesBag.Add(new DupeFileItem { FilePath = file, Size = sz, IsFailed = true, ErrorMessage = Loc("ErrHeaderBad", "標頭損壞 (無法解析長度)") });
@@ -869,7 +782,7 @@ namespace FastDupeFinder
                 {
                     await Parallel.ForEachAsync(metadataChannel.Reader.ReadAllAsync(ct), new ParallelOptions { MaxDegreeOfParallelism = cfg.PipelineSlots, CancellationToken = ct }, async (item, token) =>
                     {
-                        if (IsFileBadOrDownloading(item.FilePath))
+                        if (FileHelper.IsFileBadOrDownloading(item.FilePath))
                         {
                             item.IsFailed = true;
                             item.ErrorMessage = Loc("ErrTailHole", "尾部嚴重空洞 (未下載完成/損壞)");
@@ -916,7 +829,7 @@ namespace FastDupeFinder
                                     await ffmpegIoThrottle.WaitAsync(token);
                                     try
                                     {
-                                        await ExtractCombinedFingerprintsAsync(item, headSec, tailSec, token, ffmpegTimeoutMs);
+                                        await FFmpegHelper.ExtractCombinedFingerprintsAsync(item, headSec, tailSec, token, ffmpegTimeoutMs);
                                     }
                                     finally { ffmpegIoThrottle.Release(); }
 
@@ -975,7 +888,7 @@ namespace FastDupeFinder
         }
 
         // =========================================================================================
-        // Phase 2：極速 350秒二次分析 (解決 OP/ED 重複誤判，短片直接相容保留)
+        // 💡 Phase 2：極速 350秒二次分析 (解決 OP/ED 重複誤判，短片直接相容保留)
         // =========================================================================================
         private async Task<List<DupeFileItem>> RefineGroupsAsync(List<List<DupeFileItem>> groups, CancellationToken ct, int timeoutMs, SemaphoreSlim ioThrottle)
         {
@@ -998,7 +911,7 @@ namespace FastDupeFinder
                             if (!hasDeepScan)
                             {
                                 await ioThrottle.WaitAsync(ct);
-                                try { await ExtractCombinedFingerprintsAsync(item, 350, item.Duration.TotalSeconds - 350, ct, timeoutMs); }
+                                try { await FFmpegHelper.ExtractCombinedFingerprintsAsync(item, 350, item.Duration.TotalSeconds - 350, ct, timeoutMs); }
                                 finally { ioThrottle.Release(); }
                                 
                                 string cacheKey = item.CacheKey;
@@ -1033,291 +946,16 @@ namespace FastDupeFinder
                             
                             foreach (var rg in refinedLongGroups)
                             {
-                                if (rg.Count >= 2) finalFlatList.AddRange(ScanEngine.AssignGroupMetadata(rg, displayGroupId++));
+                                if (rg.Count >= 2) finalFlatList.AddRange(ScanEngine.AssignGroupMetadata(rg, displayGroupId++, isPhase2: true));
                             }
                         }
                     }
-                    else finalFlatList.AddRange(ScanEngine.AssignGroupMetadata(group, displayGroupId++));
+                    else finalFlatList.AddRange(ScanEngine.AssignGroupMetadata(group, displayGroupId++, isPhase2: false));
                 }
-                else finalFlatList.AddRange(ScanEngine.AssignGroupMetadata(group, displayGroupId++));
+                else finalFlatList.AddRange(ScanEngine.AssignGroupMetadata(group, displayGroupId++, isPhase2: false));
             }
 
             return finalFlatList;
-        }
-
-        // =========================================================================================
-        // 智慧標頭解析器 (Windows API 主力 + FFmpeg 救援)
-        // =========================================================================================
-        private async Task<DupeFileItem?> ExtractMetadataAsync(string filePath, CancellationToken ct, bool skipFfmpegFallback = false)
-        {
-            long fileSize = 0;
-            try { fileSize = new FileInfo(filePath).Length; } catch { return null; }
-
-            TimeSpan? finalDuration = null;
-            uint? width = 0;
-            uint? height = 0;
-
-            for (int i = 0; i < 3; i++)
-            {
-                try
-                {
-                    using var shellFile = ShellFile.FromParsingName(filePath);
-                    ulong? durationTicks = shellFile.Properties.System.Media.Duration.Value;
-                    width = shellFile.Properties.System.Video.FrameWidth.Value;
-                    height = shellFile.Properties.System.Video.FrameHeight.Value;
-
-                    if (durationTicks.HasValue && durationTicks.Value > 0)
-                    {
-                        finalDuration = TimeSpan.FromTicks((long)durationTicks.Value);
-                    }
-                    break;
-                }
-                catch { if (i < 2) await Task.Delay(200, ct); }
-            }
-
-            if (!finalDuration.HasValue || finalDuration.Value.TotalSeconds <= 0)
-            {
-                if (!skipFfmpegFallback) finalDuration = await GetDurationWithFFmpegAsync(filePath, ct);
-                else finalDuration = TimeSpan.FromSeconds(0.1); 
-            }
-
-            if (finalDuration.HasValue && finalDuration.Value.TotalSeconds > 0)
-            {
-                return new DupeFileItem
-                {
-                    FilePath = filePath,
-                    Size = fileSize,
-                    Duration = finalDuration.Value,
-                    Width = (int)(width ?? 0),
-                    Height = (int)(height ?? 0),
-                    Resolution = (width > 0 && height > 0) ? $"{width}x{height}" : Loc("ResUnknown", "未知"),
-                };
-            }
-
-            return null; 
-        }
-
-        private async Task<TimeSpan?> GetDurationWithFFmpegAsync(string filePath, CancellationToken ct)
-        {
-            string ffmpegPath = Path.Combine(AppContext.BaseDirectory, "ffmpeg.exe");
-            if (!File.Exists(ffmpegPath)) return null;
-
-            using var process = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = ffmpegPath, Arguments = $"-hide_banner -i \"{filePath}\"", 
-                    UseShellExecute = false, CreateNoWindow = true,
-                    RedirectStandardOutput = true, RedirectStandardError = true 
-                },
-                EnableRaisingEvents = true
-            };
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(3000); 
-
-            try
-            {
-                process.Start();
-                _ = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null, cts.Token); 
-
-                using var reader = process.StandardError;
-                string? line;
-                while ((line = await reader.ReadLineAsync(cts.Token)) != null)
-                {
-                    if (line.TrimStart().StartsWith("Duration:"))
-                    {
-                        var parts = line.Split(new[] { ' ', ',', '\t' }, StringSplitOptions.RemoveEmptyEntries);
-                        if (parts.Length > 1 && TimeSpan.TryParse(parts[1], out var duration))
-                        {
-                            if (!process.HasExited) try { process.Kill(true); } catch { }
-                            return duration;
-                        }
-                    }
-                }
-            }
-            catch { }
-            finally { if (!process.HasExited) try { process.Kill(true); } catch { } }
-            return null;
-        }
-
-        // =========================================================================================
-        // FFmpeg 調用封裝模組 (全記憶體串流解碼 + rawvideo 灰階輸出)
-        // =========================================================================================
-
-        private async Task ExtractCombinedFingerprintsAsync(DupeFileItem item, double headSec, double tailSec, CancellationToken ct, int ffmpegTimeoutMs)
-        {
-            string rwTimeout = "3000000";
-            
-            string args = $"-rw_timeout {rwTimeout} -v quiet -noaccurate_seek -threads 1 " +
-               $"-ss {headSec} -i \"{item.FilePath}\" " +
-               $"-ss {tailSec} -i \"{item.FilePath}\" " +
-               $"-filter_complex \"[0:v]scale=8:8,setsar=1,format=gray[l];" +
-               $"[1:v]scale=8:8,setsar=1,format=gray[r];[l][r]hstack,format=gray\" " +
-               $"-frames:v 1 -f rawvideo pipe:1";
-
-            byte[]? imageBytes = await RunFFmpegCommandAndGetOutputAsync(args, ffmpegTimeoutMs, ct);
-            if (imageBytes != null && imageBytes.Length == 128)
-            {
-                if (CalculateCombinedHashVariantsFromMemory(imageBytes, out var headVariants, out var tailVariants))
-                {
-                    lock (item.Fingerprints)
-                    {
-                        if (headVariants != null) item.Fingerprints.Add(new VideoFingerprint(headVariants, headSec, FingerprintPosition.Head));
-                        if (tailVariants != null) item.Fingerprints.Add(new VideoFingerprint(tailVariants, tailSec, FingerprintPosition.Tail));
-                    }
-                    return; 
-                }
-            }
-
-            string fallbackArgs = $"-rw_timeout {rwTimeout} -v quiet -noaccurate_seek -threads 1 " +
-               $"-ss {headSec} -i \"{item.FilePath}\" " +
-               $"-vf \"scale=8:8,setsar=1,format=gray\" " +
-               $"-frames:v 1 -f rawvideo pipe:1";
-
-            byte[]? headOnlyBytes = await RunFFmpegCommandAndGetOutputAsync(fallbackArgs, ffmpegTimeoutMs, ct);
-            if (headOnlyBytes != null && headOnlyBytes.Length == 64) 
-            {
-                if (CalculateSingleHashVariantsFromMemory(headOnlyBytes, out var headOnlyVariants))
-                {
-                    lock (item.Fingerprints)
-                    {
-                        if (headOnlyVariants != null) item.Fingerprints.Add(new VideoFingerprint(headOnlyVariants, headSec, FingerprintPosition.Head));
-                    }
-                }
-            }
-        }
-
-        private async Task<byte[]?> RunFFmpegCommandAndGetOutputAsync(string arguments, int timeoutMs, CancellationToken ct)
-        {
-            string ffmpegPath = Path.Combine(AppContext.BaseDirectory, "ffmpeg.exe");
-            if (!File.Exists(ffmpegPath)) return null;
-
-            var processInfo = new ProcessStartInfo
-            {
-                FileName = ffmpegPath, Arguments = arguments,
-                UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardOutput = true, RedirectStandardError = true
-            };
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            var outputStream = new MemoryStream();
-
-            try
-            {
-                using var process = new Process { StartInfo = processInfo, EnableRaisingEvents = true };
-                process.Start();
-
-                var copyStdOut = CopyStreamWithTimeout(process.StandardOutput.BaseStream, outputStream, cts.Token);
-                var copyStdErr = CopyStreamWithTimeout(process.StandardError.BaseStream, Stream.Null, cts.Token);
-
-                cts.CancelAfter(timeoutMs);
-
-                await Task.WhenAny(process.WaitForExitAsync(cts.Token), Task.Delay(timeoutMs + 500, ct));
-
-                if (!process.HasExited)
-                {
-                    try { process.Kill(entireProcessTree: true); } catch { }
-                    return null;
-                }
-
-                await Task.WhenAll(copyStdOut, copyStdErr);
-                return process.ExitCode == 0 ? outputStream.ToArray() : null;
-            }
-            catch { return null; }
-        }
-
-        private static async Task CopyStreamWithTimeout(Stream source, Stream destination, CancellationToken token)
-        {
-            try { await source.CopyToAsync(destination, 81920, token); } catch { }
-        }
-
-        // --- 8x8 Feature Calculation ---
-
-        private bool CalculateCombinedHashVariantsFromMemory(byte[] imageData, out List<ulong>? headVariants, out List<ulong>? tailVariants)
-        {
-            headVariants = null;
-            tailVariants = null;
-
-            if (imageData == null || imageData.Length != 128) return false;
-
-            int[] leftGrays = new int[64];
-            int[] rightGrays = new int[64];
-            int leftTotal = 0, rightTotal = 0;
-
-            for (int y = 0; y < 8; y++)
-            {
-                int rowStart = y * 16;
-                for (int x = 0; x < 8; x++)
-                {
-                    byte grayLeft = imageData[rowStart + x];
-                    byte grayRight = imageData[rowStart + 8 + x];
-
-                    int idx = y * 8 + x;
-                    leftGrays[idx] = grayLeft;
-                    rightGrays[idx] = grayRight;
-
-                    leftTotal += grayLeft;
-                    rightTotal += grayRight;
-                }
-            }
-
-            headVariants = new List<ulong>(8);
-            Generate8x8VariantsInline(leftGrays, leftTotal / 64, headVariants);
-            
-            tailVariants = new List<ulong>(8);
-            Generate8x8VariantsInline(rightGrays, rightTotal / 64, tailVariants);
-            
-            return true;
-        }
-
-        private bool CalculateSingleHashVariantsFromMemory(byte[] imageData, out List<ulong>? variants)
-        {
-            variants = null;
-            if (imageData == null || imageData.Length != 64) return false;
-
-            int[] grays = new int[64];
-            int total = 0;
-
-            for (int i = 0; i < 64; i++)
-            {
-                grays[i] = imageData[i];
-                total += imageData[i];
-            }
-
-            variants = new List<ulong>(8);
-            Generate8x8VariantsInline(grays, total / 64, variants);
-            return true;
-        }
-
-        private void Generate8x8VariantsInline(int[] pixels, int avg, List<ulong> list)
-        {
-            for (int v = 0; v < 8; v++)
-            {
-                ulong h = 0;
-                for (int y = 0; y < 8; y++)
-                {
-                    for (int x = 0; x < 8; x++)
-                    {
-                        int srcX = x, srcY = y;
-                        switch (v)
-                        {
-                            case 1: srcX = 7 - x; break;
-                            case 2: srcY = 7 - y; break;
-                            case 3: srcX = 7 - x; srcY = 7 - y; break;
-                            case 4: srcX = y; srcY = x; break;
-                            case 5: srcX = y; srcY = 7 - x; break;
-                            case 6: srcX = 7 - y; srcY = x; break;
-                            case 7: srcX = 7 - y; srcY = 7 - x; break;
-                        }
-                        if (pixels[srcY * 8 + srcX] >= avg)
-                        {
-                            h |= (1UL << (63 - (y * 8 + x)));
-                        }
-                    }
-                }
-                list.Add(h);
-            }
         }
 
         // =========================================================================================
@@ -1335,8 +973,8 @@ namespace FastDupeFinder
         private async void ShowPreviewAsync(string path)
         {
             ReleasePreviewMemory();
-            OpenBtn.Visibility = Visibility.Visible;
-            PreviewHintText.Visibility = Visibility.Collapsed;
+            if (this.FindName("OpenBtn") is Button ob) ob.Visibility = Visibility.Visible;
+            if (this.FindName("PreviewHintText") is TextBlock ht) ht.Visibility = Visibility.Collapsed;
 
             var targetItem = _cachedScanResults.FirstOrDefault(x => x.FilePath == path);
             UpdatePreviewButtonsState(targetItem);
@@ -1357,10 +995,9 @@ namespace FastDupeFinder
                     bitmap.StreamSource = stream;
                     bitmap.EndInit();
                     bitmap.Freeze();
-                    PreviewImage.Source = bitmap;
-                    PreviewImage.Visibility = Visibility.Visible;
+                    if (this.FindName("PreviewImage") is Image img) { img.Source = bitmap; img.Visibility = Visibility.Visible; }
                 }
-                else if (_supportedVideoExts.Contains(ext))
+                else if (AppConstants.SupportedVideoExts.Contains(ext))
                 {
                     if (targetItem != null && targetItem.IsReference && (targetItem.HeadMatchTime >= 0 || targetItem.TailMatchTime >= 0))
                     {
@@ -1369,7 +1006,7 @@ namespace FastDupeFinder
                             (targetItem.HeadMatchTime >= 0 ? string.Format(Loc("PrevRefHead", "📍 基準檔 (頭部特徵吻合: 約第 {0} 秒)"), (int)targetItem.HeadMatchTime) :
                                                              string.Format(Loc("PrevRefTail", "📍 基準檔 (尾部特徵吻合: 約第 {0} 秒)"), (int)targetItem.TailMatchTime));
 
-                        byte[]? dualBytes = await GenerateDualPreviewThumbnailBytesAsync(path, targetItem.HeadMatchTime, targetItem.TailMatchTime);
+                        byte[]? dualBytes = await FFmpegHelper.GenerateDualPreviewThumbnailBytesAsync(path, targetItem.HeadMatchTime, targetItem.TailMatchTime);
                         if (_currentPreviewId != previewId) return;
                         RenderPreviewImage(dualBytes, overlayMsg);
                     }
@@ -1377,10 +1014,12 @@ namespace FastDupeFinder
                     {
                         double sec = targetItem?.MatchSeconds >= 0 ? targetItem.MatchSeconds : 100;
                         
-                        PreviewText.Text = string.Format(Loc("PrevLoading", "⏳ 載入特徵吻合處預覽 (約第 {0} 秒)..."), (int)sec);
-                        PreviewText.Visibility = Visibility.Visible;
+                        if (this.FindName("PreviewText") is TextBox pt1) {
+                            pt1.Text = string.Format(Loc("PrevLoading", "⏳ 載入特徵吻合處預覽 (約第 {0} 秒)..."), (int)sec);
+                            pt1.Visibility = Visibility.Visible;
+                        }
 
-                        byte[]? thumbBytes = await GenerateHighResPreviewThumbnailBytesAsync(path, sec);
+                        byte[]? thumbBytes = await FFmpegHelper.GenerateHighResPreviewThumbnailBytesAsync(path, sec);
                         if (_currentPreviewId != previewId) return;
                         RenderPreviewImage(thumbBytes, string.Format(Loc("PrevShowing", "📍 目前顯示預覽位置：第 {0} 秒"), (int)sec));
                     }
@@ -1390,8 +1029,10 @@ namespace FastDupeFinder
             {
                 if (_currentPreviewId == previewId)
                 {
-                    PreviewText.Text = Loc("PrevErrMsg", "無法預覽: ") + ex.Message;
-                    PreviewText.Visibility = Visibility.Visible;
+                    if (this.FindName("PreviewText") is TextBox pt2) {
+                        pt2.Text = Loc("PrevErrMsg", "無法預覽: ") + ex.Message;
+                        pt2.Visibility = Visibility.Visible;
+                    }
                 }
             }
         }
@@ -1408,68 +1049,53 @@ namespace FastDupeFinder
                 bitmap.EndInit();
                 bitmap.Freeze();
 
-                PreviewImage.Source = bitmap;
-                PreviewImage.Visibility = Visibility.Visible;
+                if (this.FindName("PreviewImage") is Image img) { img.Source = bitmap; img.Visibility = Visibility.Visible; }
                 
-                PreviewText.Text = overlayText;
-                PreviewText.Background = new SolidColorBrush(Color.FromArgb(200, 0, 0, 0));
-                PreviewText.Foreground = Brushes.White;
-                PreviewText.HorizontalAlignment = HorizontalAlignment.Center;
-                PreviewText.VerticalAlignment = VerticalAlignment.Top;
-                PreviewText.Padding = new Thickness(6, 4, 6, 4);
-                PreviewText.Margin = new Thickness(0, 10, 0, 0);
-                PreviewText.Visibility = Visibility.Visible;
+                if (this.FindName("PreviewText") is TextBox pt) {
+                    pt.Text = overlayText;
+                    pt.Background = new SolidColorBrush(Color.FromArgb(200, 0, 0, 0));
+                    pt.Foreground = Brushes.White;
+                    pt.HorizontalAlignment = HorizontalAlignment.Center;
+                    pt.VerticalAlignment = VerticalAlignment.Top;
+                    pt.Padding = new Thickness(6, 4, 6, 4);
+                    pt.Margin = new Thickness(0, 10, 0, 0);
+                    pt.Visibility = Visibility.Visible;
+                }
             }
             else
             {
-                PreviewText.Text = Loc("PrevErrDual", "❌ 無法產生預覽圖");
-                PreviewText.Visibility = Visibility.Visible;
+                if (this.FindName("PreviewText") is TextBox pt) {
+                    pt.Text = Loc("PrevErrDual", "❌ 無法產生預覽圖");
+                    pt.Visibility = Visibility.Visible;
+                }
             }
-        }
-
-        private async Task<byte[]?> GenerateDualPreviewThumbnailBytesAsync(string videoPath, double headSec, double tailSec)
-        {
-            if (headSec < 0 && tailSec < 0) return null;
-            if (headSec >= 0 && tailSec < 0) return await GenerateHighResPreviewThumbnailBytesAsync(videoPath, headSec);
-            if (headSec < 0 && tailSec >= 0) return await GenerateHighResPreviewThumbnailBytesAsync(videoPath, tailSec);
-
-            string args = $"-rw_timeout 3000000 -v quiet -ss {headSec} -i \"{videoPath}\" -ss {tailSec} -i \"{videoPath}\" " +
-                        $"-filter_complex \"[0:v]scale=320:-2,setdar=16/9[l];[1:v]scale=320:-2,setdar=16/9[r];[l][r]vstack\" " +
-                        $"-vframes 1 -q:v 2 -f image2 -c:v mjpeg pipe:1";
-
-            return await RunFFmpegCommandAndGetOutputAsync(args, 5000, CancellationToken.None);
-        }
-
-        private async Task<byte[]?> GenerateHighResPreviewThumbnailBytesAsync(string videoPath, double seconds)
-        {
-            string args = $"-rw_timeout 3000000 -v quiet -ss {seconds} -i \"{videoPath}\" -vframes 1 -q:v 2 -f image2 -c:v mjpeg pipe:1";
-            return await RunFFmpegCommandAndGetOutputAsync(args, 5000, CancellationToken.None);
         }
 
         private void ReleasePreviewMemory()
         {
-            PreviewImage.Source = null;
-            PreviewImage.Visibility = Visibility.Collapsed;
+            if (this.FindName("PreviewImage") is Image img) { img.Source = null; img.Visibility = Visibility.Collapsed; }
 
-            if (PreviewVideo != null)
+            if (this.FindName("PreviewVideo") is MediaElement v)
             {
-                PreviewVideo.Source = null;
-                PreviewVideo.Close();
-                PreviewVideo.Visibility = Visibility.Collapsed;
+                v.Source = null;
+                v.Close();
+                v.Visibility = Visibility.Collapsed;
             }
 
-            PreviewText.Text = "";
-            PreviewText.Visibility = Visibility.Collapsed;
-            PreviewText.Background = Brushes.Transparent;
-            PreviewText.Foreground = Brushes.Black;
-            PreviewText.HorizontalAlignment = HorizontalAlignment.Stretch;
-            PreviewText.VerticalAlignment = VerticalAlignment.Center;
-            PreviewText.Margin = new Thickness(5);
+            if (this.FindName("PreviewText") is TextBox pt) {
+                pt.Text = "";
+                pt.Visibility = Visibility.Collapsed;
+                pt.Background = Brushes.Transparent;
+                pt.Foreground = Brushes.Black;
+                pt.HorizontalAlignment = HorizontalAlignment.Stretch;
+                pt.VerticalAlignment = VerticalAlignment.Center;
+                pt.Margin = new Thickness(5);
+            }
 
-            PreviewHintText.Visibility = Visibility.Visible;
-            OpenBtn.Visibility = Visibility.Collapsed;
-            RepairBtn.Visibility = Visibility.Collapsed;
-            UpgradeBtn.Visibility = Visibility.Collapsed;
+            if (this.FindName("PreviewHintText") is TextBlock ht) ht.Visibility = Visibility.Visible;
+            if (this.FindName("OpenBtn") is Button ob) ob.Visibility = Visibility.Collapsed;
+            if (this.FindName("RepairBtn") is Button rb) rb.Visibility = Visibility.Collapsed;
+            if (this.FindName("UpgradeBtn") is Button ub) ub.Visibility = Visibility.Collapsed;
 
             GC.Collect();
             GC.WaitForPendingFinalizers();
@@ -1508,7 +1134,7 @@ namespace FastDupeFinder
                 return;
 
             ReleasePreviewMemory();
-            DeleteBtn.IsEnabled = false;
+            if (this.FindName("DeleteBtn") is Button delBtn) delBtn.IsEnabled = false;
             StatusText.Text = Loc("StatusDeleting", "🗑️ 正在批量刪除檔案，請稍候...");
 
             int successCount = 0;
@@ -1519,7 +1145,7 @@ namespace FastDupeFinder
                 int processed = 0;
                 foreach (var item in selectedItems)
                 {
-                    if (SendToRecycleBin(item.FilePath))
+                    if (FileHelper.SendToRecycleBin(item.FilePath))
                     {
                         deletedItems.Add(item);
                         successCount++;
@@ -1542,33 +1168,6 @@ namespace FastDupeFinder
             UpdateGlobalUIState();
         }
 
-        [DllImport("shell32.dll", CharSet = CharSet.Auto)]
-        private static extern int SHFileOperation(ref SHFILEOPSTRUCT FileOp);
-
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
-        private struct SHFILEOPSTRUCT
-        {
-            public IntPtr hwnd;
-            public uint wFunc;
-            public string pFrom;
-            public string pTo;
-            public ushort fFlags;
-            public bool fAnyOperationsAborted;
-            public IntPtr hNameMappings;
-            public string lpszProgressTitle;
-        }
-
-        private bool SendToRecycleBin(string path)
-        {
-            if (!File.Exists(path)) return false;
-            try
-            {
-                var shf = new SHFILEOPSTRUCT { wFunc = 0x0003, fFlags = 0x0454, pFrom = path + '\0' + '\0' };
-                return SHFileOperation(ref shf) == 0;
-            }
-            catch { return false; }
-        }
-
         private void OpenBtn_Click(object sender, RoutedEventArgs e)
         {
             if (FileListView.SelectedItem is DupeFileItem item && File.Exists(item.FilePath)) 
@@ -1576,20 +1175,20 @@ namespace FastDupeFinder
         }
 
         private void ToggleLangBtn_Click(object sender, RoutedEventArgs e) => I18nManager.Instance.ToggleLanguage();
-        private void ClearPath_Click(object sender, RoutedEventArgs e) => PathTextBox.Text = "";
+        private void ClearPath_Click(object sender, RoutedEventArgs e) { if (this.FindName("PathTextBox") is TextBox pt) pt.Text = ""; }
 
         private void BrowseFolder_Click(object sender, RoutedEventArgs e)
         {
             var d = new OpenFolderDialog();
-            if (d.ShowDialog() == true)
-                PathTextBox.Text = string.IsNullOrWhiteSpace(PathTextBox.Text) ? d.FolderName : $"{PathTextBox.Text}; {d.FolderName}";
+            if (d.ShowDialog() == true && this.FindName("PathTextBox") is TextBox pt)
+                pt.Text = string.IsNullOrWhiteSpace(pt.Text) ? d.FolderName : $"{pt.Text}; {d.FolderName}";
         }
 
         private void BrowseExcludeFolder_Click(object sender, RoutedEventArgs e)
         {
             var d = new OpenFolderDialog();
-            if (d.ShowDialog() == true)
-                ExcludePathTextBox.Text = string.IsNullOrWhiteSpace(ExcludePathTextBox.Text) ? d.FolderName : $"{ExcludePathTextBox.Text}; {d.FolderName}";
+            if (d.ShowDialog() == true && this.FindName("ExcludePathTextBox") is TextBox et)
+                et.Text = string.IsNullOrWhiteSpace(et.Text) ? d.FolderName : $"{et.Text}; {d.FolderName}";
         }
     }
 }

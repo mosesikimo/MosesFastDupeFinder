@@ -6,9 +6,18 @@ using System.Runtime.CompilerServices;
 
 namespace FastDupeFinder
 {
-    // ========================================================================
-    // Pipeline 配置管理（集中式調參）
-    // ========================================================================
+    public static class AppConstants
+    {
+        public static readonly string[] SupportedVideoExts = {
+            ".mp4", ".mkv", ".avi", ".wmv", ".mov", ".ts", ".m2ts",
+            ".mts", ".vob", ".mpg", ".mpeg", ".m4v", ".3gp", ".divx", ".flv", ".rmvb"
+        };
+
+        public static readonly string[] LegacyVideoExts = {
+            ".vob", ".avi", ".3gp", ".wmv", ".ts", ".m2ts", ".mts", ".mpg", ".mpeg", ".divx", ".flv", ".rmvb", ".mov"
+        };
+    }
+
     public class PipelineConfig
     {
         public int Cpu { get; }
@@ -33,28 +42,11 @@ namespace FastDupeFinder
             }
         }
 
-        public int MetadataBuffer
-        {
-            get
-            {
-                int base_val = Cpu * 50;
-                if (AvailableMemoryMb < 2048) return Cpu * 25;
-                return base_val;
-            }
-        }
-
+        public int MetadataBuffer => (AvailableMemoryMb < 2048) ? Cpu * 25 : Cpu * 50;
         public int MetadataParallelism => Cpu * 2;
         public int PipelineSlots => 2000;
 
-        public int FfmpegIoLimit
-        {
-            get
-            {
-                int base_val = IsSsd ? 8 : 4;
-                int adjusted = Math.Min(base_val, Math.Max(2, Cpu / 2));
-                return adjusted;
-            }
-        }
+        public int FfmpegIoLimit => Math.Min(IsSsd ? 8 : 4, Math.Max(2, Cpu / 2));
 
         private bool DetectSsdDrive()
         {
@@ -62,11 +54,7 @@ namespace FastDupeFinder
             catch { return true; }
         }
 
-        public override string ToString()
-        {
-            return $"[Pipeline] CPU:{Cpu} | FileBuffer:{FileBuffer} | MetaBuffer:{MetadataBuffer} | " +
-                   $"PipelineSlots:{PipelineSlots} | FfmpegIO:{FfmpegIoLimit} | IsSSD:{IsSsd}";
-        }
+        public override string ToString() => $"[Pipeline] CPU:{Cpu} | FileBuffer:{FileBuffer} | MetaBuffer:{MetadataBuffer} | PipelineSlots:{PipelineSlots} | FfmpegIO:{FfmpegIoLimit} | IsSSD:{IsSsd}";
     }
 
     public class AppSettings
@@ -84,7 +72,7 @@ namespace FastDupeFinder
         protected void OnPropertyChanged([CallerMemberName] string propertyName = null!)
             => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 
-        public string CacheKey { get; set; } = "";
+        public string CacheKey { get; set; } = ""; 
 
         private bool _isFailed = false;
         public bool IsFailed { get => _isFailed; set { _isFailed = value; OnPropertyChanged(); OnPropertyChanged(nameof(SimilarityStr)); } }

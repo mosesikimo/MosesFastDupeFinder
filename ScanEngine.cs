@@ -54,12 +54,38 @@ namespace FastDupeFinder
             }
             return false; // 完全沒有深層吻合 -> 不同集數，踢出/分離
         }
+
+        // 💡 嚴格深度比對：找出 350 或 -350 的特徵，如果有任何一個深度特徵吻合即判定相同
+        public static (int Score, double Sec1, double Sec2, FingerprintPosition Pos1, FingerprintPosition Pos2) CompareDeep(
+            DupeFileItem f1, DupeFileItem f2)
+        {
+            var deepFp1 = f1.Fingerprints.Where(f => Math.Abs(f.TimeSec - 350) < 5 || Math.Abs((f1.Duration.TotalSeconds - f.TimeSec) - 350) < 5).ToList();
+            var deepFp2 = f2.Fingerprints.Where(f => Math.Abs(f.TimeSec - 350) < 5 || Math.Abs((f2.Duration.TotalSeconds - f.TimeSec) - 350) < 5).ToList();
+
+            if (deepFp1.Count == 0 || deepFp2.Count == 0) return (0, -1, -1, FingerprintPosition.Unknown, FingerprintPosition.Unknown);
+
+            foreach (var fp1 in deepFp1)
+            {
+                foreach (var fp2 in deepFp2)
+                {
+                    if (fp1.Position != fp2.Position) continue;
+                    
+                    for (int v = 0; v < 8; v++)
+                    {
+                        if (BitOperations.PopCount(fp1.Hashes[0] ^ fp2.Hashes[v]) == 0)
+                        {
+                            return (100, fp1.TimeSec, fp2.TimeSec, fp1.Position, fp2.Position);
+                        }
+                    }
+                }
+            }
+            return (0, -1, -1, FingerprintPosition.Unknown, FingerprintPosition.Unknown);
+        }
     }
 
     public static class ScanEngine
     {
-        // 💡 [重構核心] 統一聯合尋找演算法 (Union-Find) 共用底層邏輯
-        private static List<List<DupeFileItem>> GroupFilesByPredicate(List<DupeFileItem> files, Func<DupeFileItem, DupeFileItem, bool> isMatch)
+        public static List<List<DupeFileItem>> GroupFilesByPredicate(List<DupeFileItem> files, Func<DupeFileItem, DupeFileItem, bool> isMatch)
         {
             int n = files.Count;
             if (n == 0) return new List<List<DupeFileItem>>();
@@ -105,23 +131,19 @@ namespace FastDupeFinder
                 SimilarityEngine.Compare(f1, f2, FingerprintPosition.Tail).Score == 100);
         }
 
+        // 💡 補回 missing 的深度群組分離函數
         public static List<List<DupeFileItem>> GroupLongsByDeepFeature(List<DupeFileItem> longs)
         {
             return GroupFilesByPredicate(longs, SimilarityEngine.IsDeepMatch);
         }
 
-        public static List<DupeFileItem> AssignGroupMetadata(List<DupeFileItem> group, int displayGroupId)
+        public static List<DupeFileItem> AssignGroupMetadata(List<DupeFileItem> group, int displayGroupId, bool isPhase2)
         {
-            DupeFileItem? reference = group.FirstOrDefault(f =>
-                f.Fingerprints.Any(fp => fp.Position == FingerprintPosition.Head) &&
-                group.Any(other => other != f && SimilarityEngine.Compare(f, other, FingerprintPosition.Head).Score == 100));
+            Func<DupeFileItem, DupeFileItem, (int Score, double Sec1, double Sec2, FingerprintPosition Pos1, FingerprintPosition Pos2)> compareFunc = 
+                isPhase2 ? SimilarityEngine.CompareDeep : (f1, f2) => SimilarityEngine.Compare(f1, f2, FingerprintPosition.Unknown);
 
-            if (reference == null)
-            {
-                reference = group.FirstOrDefault(f =>
-                    f.Fingerprints.Any(fp => fp.Position == FingerprintPosition.Tail) &&
-                    group.Any(other => other != f && SimilarityEngine.Compare(f, other, FingerprintPosition.Tail).Score == 100));
-            }
+            DupeFileItem? reference = group.FirstOrDefault(f =>
+                group.Any(other => other != f && compareFunc(f, other).Score == 100));
 
             reference ??= group.First();
 
@@ -130,23 +152,7 @@ namespace FastDupeFinder
             reference.MatchSeconds = -1;
             reference.MatchDetail = "";
 
-            foreach (var other in group)
-            {
-                if (other == reference) continue;
-
-                var headMatch = SimilarityEngine.Compare(reference, other, FingerprintPosition.Head);
-                if (headMatch.Score == 100 && reference.HeadMatchTime < 0)
-                    reference.HeadMatchTime = headMatch.Sec1;
-
-                var tailMatch = SimilarityEngine.Compare(reference, other, FingerprintPosition.Tail);
-                if (tailMatch.Score == 100 && reference.TailMatchTime < 0)
-                    reference.TailMatchTime = tailMatch.Sec1;
-            }
-
-            var sorted = group
-                .OrderByDescending(x => x.IsReference)
-                .ThenBy(x => x.FilePath)
-                .ToList();
+            var sorted = group.OrderByDescending(x => x.IsReference).ThenBy(x => x.FilePath).ToList();
 
             foreach (var item in sorted)
             {
@@ -156,21 +162,101 @@ namespace FastDupeFinder
                 item.IsReference = false;
                 item.SimilarityScore = 100;
 
-                var headMatch = SimilarityEngine.Compare(reference, item, FingerprintPosition.Head);
-                if (headMatch.Score == 100)
+                var match = compareFunc(reference, item);
+                if (match.Score == 100)
                 {
-                    item.MatchSeconds = headMatch.Sec2;
-                    item.MatchDetail = I18nManager.Instance.GetString("TxtHeadMatch", "頭部 {0}秒").Replace("{0}", ((int)headMatch.Sec1).ToString());
+                    if (match.Pos1 == FingerprintPosition.Head && reference.HeadMatchTime < 0) reference.HeadMatchTime = match.Sec1;
+                    if (match.Pos1 == FingerprintPosition.Tail && reference.TailMatchTime < 0) reference.TailMatchTime = match.Sec1;
+
+                    item.MatchSeconds = match.Sec2;
+                    item.MatchDetail = match.Pos1 == FingerprintPosition.Head ? 
+                        I18nManager.Instance.GetString("TxtHeadMatch", "頭部 {0}秒").Replace("{0}", ((int)match.Sec1).ToString()) :
+                        I18nManager.Instance.GetString("TxtTailMatch", "尾部 {0}秒").Replace("{0}", ((int)match.Sec1).ToString());
                 }
-                else
+                else if (isPhase2)
                 {
-                    var tailMatch = SimilarityEngine.Compare(reference, item, FingerprintPosition.Tail);
-                    item.MatchSeconds = tailMatch.Sec2;
-                    item.MatchDetail = I18nManager.Instance.GetString("TxtTailMatch", "尾部 {0}秒").Replace("{0}", ((int)tailMatch.Sec1).ToString());
+                    var fbMatch = SimilarityEngine.Compare(reference, item, FingerprintPosition.Unknown);
+                    if (fbMatch.Score == 100)
+                    {
+                        item.MatchSeconds = fbMatch.Sec2;
+                        item.MatchDetail = fbMatch.Pos1 == FingerprintPosition.Head ? 
+                            I18nManager.Instance.GetString("TxtHeadMatch", "頭部 {0}秒").Replace("{0}", ((int)fbMatch.Sec1).ToString()) :
+                            I18nManager.Instance.GetString("TxtTailMatch", "尾部 {0}秒").Replace("{0}", ((int)fbMatch.Sec1).ToString());
+                    }
                 }
             }
 
             return sorted;
+        }
+
+        // --- 8x8 Feature Calculation (純記憶體轉換) ---
+        public static bool CalculateCombinedHashVariantsFromMemory(byte[] imageData, out List<ulong>? headVariants, out List<ulong>? tailVariants)
+        {
+            headVariants = null; tailVariants = null;
+            if (imageData == null || imageData.Length != 128) return false;
+
+            int[] leftGrays = new int[64], rightGrays = new int[64];
+            int leftTotal = 0, rightTotal = 0;
+
+            for (int y = 0; y < 8; y++)
+            {
+                int rowStart = y * 16;
+                for (int x = 0; x < 8; x++)
+                {
+                    byte grayLeft = imageData[rowStart + x], grayRight = imageData[rowStart + 8 + x];
+                    int idx = y * 8 + x;
+                    leftGrays[idx] = grayLeft; rightGrays[idx] = grayRight;
+                    leftTotal += grayLeft; rightTotal += grayRight;
+                }
+            }
+
+            headVariants = new List<ulong>(8);
+            Generate8x8VariantsInline(leftGrays, leftTotal / 64, headVariants);
+            
+            tailVariants = new List<ulong>(8);
+            Generate8x8VariantsInline(rightGrays, rightTotal / 64, tailVariants);
+            return true;
+        }
+
+        public static bool CalculateSingleHashVariantsFromMemory(byte[] imageData, out List<ulong>? variants)
+        {
+            variants = null;
+            if (imageData == null || imageData.Length != 64) return false;
+
+            int[] grays = new int[64];
+            int total = 0;
+            for (int i = 0; i < 64; i++) { grays[i] = imageData[i]; total += imageData[i]; }
+
+            variants = new List<ulong>(8);
+            Generate8x8VariantsInline(grays, total / 64, variants);
+            return true;
+        }
+
+        private static void Generate8x8VariantsInline(int[] pixels, int avg, List<ulong> list)
+        {
+            for (int v = 0; v < 8; v++)
+            {
+                ulong h = 0;
+                for (int y = 0; y < 8; y++)
+                {
+                    for (int x = 0; x < 8; x++)
+                    {
+                        int srcX = x, srcY = y;
+                        switch (v)
+                        {
+                            case 1: srcX = 7 - x; break;
+                            case 2: srcY = 7 - y; break;
+                            case 3: srcX = 7 - x; srcY = 7 - y; break;
+                            case 4: srcX = y; srcY = x; break;
+                            case 5: srcX = y; srcY = 7 - x; break;
+                            case 6: srcX = 7 - y; srcY = x; break;
+                            case 7: srcX = 7 - y; srcY = 7 - x; break;
+                        }
+                        if (pixels[srcY * 8 + srcX] >= avg) h |= (1UL << (63 - (y * 8 + x)));
+                    }
+                }
+                list.Add(h);
+            }
         }
     }
 }

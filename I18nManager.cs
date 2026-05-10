@@ -307,8 +307,8 @@ namespace FastDupeFinder
             {"TxtHead", "Head"},
             {"TxtTail", "Tail"},
             {"TxtFeature", "Feature"},
-            {"TxtHeadMatch", "Head {0}s"},
-            {"TxtTailMatch", "Tail {0}s"},
+            {"TxtHeadMatch", "頭部 {0}s"},
+            {"TxtTailMatch", "尾部 {0}s"},
             {"StatusTime", " (Time: {0}m {1}s)"} 
         };
 
