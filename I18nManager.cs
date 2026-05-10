@@ -55,6 +55,12 @@ namespace FastDupeFinder
 
         無論是累積多年的影音素材、或是散落各處的備份檔案，這套工具都能在轉瞬之間，為你清理出寶貴的硬碟空間。
 
+        ⚙️ 系統需求與 FFmpeg (重要)
+        
+        為了保持核心極致輕量，本軟體的「影像特徵擷取」與「無損斷尾修復」高度依賴開源的 `ffmpeg.exe`。
+        如果您是直接下載原始碼編譯，請務必自行前往 FFmpeg 官網 (https://ffmpeg.org/download.html) 下載 Windows 版本的 `ffmpeg.exe`，並將其與本程式 (`FastDupeFinder.exe`) 放置於同一個資料夾中。
+        (若是下載發布版 zip，通常已經內含)
+
         🤝 聯繫作者
 
         若本工具為你省下了時間，或想交流系統架構與技術，歡迎隨時聯繫！
@@ -122,6 +128,12 @@ namespace FastDupeFinder
         But if you need an industrial-grade retrieval artifact with blazing fast comparison speed, that won't freeze when handling massive large files, won't crash on corrupted files, and definitely won't accidentally delete your precious collections due to bugs — you've found the right one.
 
         Whether it's media materials accumulated over the years, or backup files scattered everywhere, this tool can clean up valuable hard drive space for you in the blink of an eye.
+
+        ⚙️ System Requirements & FFmpeg (Important)
+        
+        To keep the core extremely lightweight, the "Video Feature Extraction" and "Lossless Tail Repair" heavily rely on the open-source `ffmpeg.exe`.
+        If you compile from source code, please download the Windows version of `ffmpeg.exe` from the official FFmpeg website (https://ffmpeg.org/download.html) and place it in the same folder as this program (`FastDupeFinder.exe`).
+        (If you downloaded the release zip, it is usually included.)
 
         🤝 Contact the Author
 

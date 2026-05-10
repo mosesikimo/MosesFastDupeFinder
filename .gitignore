@@ -1,14 +1,19 @@
-# .NET Core
 [Bb]in/
 [Oo]bj/
 .vs/
 *.user
 
-# Publish
+Publish
+
 publish/
 [Pp]ublish/
 
-# App local caches
+App local caches
+
 fingerprint_cache.json
 settings.json
 lang_template.json
+
+External Binaries
+
+ffmpeg.exe

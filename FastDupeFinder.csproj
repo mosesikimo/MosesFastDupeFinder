@@ -2,31 +2,20 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-
     <TargetFramework>net9.0-windows</TargetFramework>
-
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-
     <UseWPF>true</UseWPF>
     <PlatformTarget>x64</PlatformTarget>
 
-    <!-- 單檔發行 -->
+    <!-- 單檔發行設定 -->
     <PublishSingleFile>true</PublishSingleFile>
-
-    <!-- 包含 .NET Runtime -->
     <SelfContained>true</SelfContained>
-
-    <!-- Windows x64 -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-
-    <!-- Native DLL 自解壓 -->
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-
-    <!-- 壓縮 -->
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
 
-    <!-- 不輸出 pdb -->
+    <!-- 不輸出 pdb 除錯檔，讓發行版更乾淨 -->
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
 
@@ -35,17 +24,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="ffmpeg.exe">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-  </ItemGroup>
-
-  <Target Name="CopyFFmpegToPublish" AfterTargets="Publish">
-    <Copy
-      SourceFiles="ffmpeg.exe"
-      DestinationFolder="$(PublishDir)" />
-  </Target>
-  <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAPICodePack-Shell" Version="1.1.0" />
   </ItemGroup>
+
 </Project>
