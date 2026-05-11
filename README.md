@@ -1,3 +1,5 @@
+9000 vedios for 6T =>22mins
+
 <img width="1910" height="1010" alt="image" src="https://github.com/user-attachments/assets/dd45f26c-f623-4c70-96a5-6d7c843072e4" />
 
 <img width="1908" height="1012" alt="image" src="https://github.com/user-attachments/assets/b9080cd6-7228-4e57-8d66-51a3483c777e" />
