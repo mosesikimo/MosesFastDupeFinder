@@ -1,3 +1,8 @@
+<img width="1910" height="1010" alt="image" src="https://github.com/user-attachments/assets/dd45f26c-f623-4c70-96a5-6d7c843072e4" />
+
+<img width="1908" height="1012" alt="image" src="https://github.com/user-attachments/assets/b9080cd6-7228-4e57-8d66-51a3483c777e" />
+
+
 🚀 FastDupeFinder —— 極速影片重複尋找工具
 
 「警告：本軟體沒有華麗的轉場動畫，因為作者的技能樹全點在『底層架構』跟『極限效能』上了。」
