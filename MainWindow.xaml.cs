@@ -877,7 +877,7 @@ namespace FastDupeFinder
             // Phase 1: 基本比對分群 (使用 100 秒特徵)
             var phase1Groups = await Task.Run(() => ScanEngine.GroupFiles(suspectFiles));
 
-            progress.Report(Loc("ProgPhase2", "🔬 正在執行 350秒 深度特徵比對 (攔截誤判)..."));
+            progress.Report(Loc("ProgPhase2", "🔬 正在執行 200秒 深度特徵比對 (攔截誤判)..."));
             
             // Phase 2: 深度二次分析 (攔截大群組進行破局)
             var finalResults = await RefineGroupsAsync(phase1Groups, ct, ffmpegTimeoutMs, ffmpegIoThrottle);
@@ -888,7 +888,7 @@ namespace FastDupeFinder
         }
 
         // =========================================================================================
-        // 💡 Phase 2：極速 350秒二次分析 (解決 OP/ED 重複誤判，短片直接相容保留)
+        // 💡 Phase 2：極速 200秒二次分析 (解決 OP/ED 重複誤判，短片直接相容保留)
         // =========================================================================================
         private async Task<List<DupeFileItem>> RefineGroupsAsync(List<List<DupeFileItem>> groups, CancellationToken ct, int timeoutMs, SemaphoreSlim ioThrottle)
         {
@@ -901,17 +901,17 @@ namespace FastDupeFinder
                 {
                     var tasks = group.Select(async item =>
                     {
-                        if (item.Duration.TotalSeconds > 360)
+                        if (item.Duration.TotalSeconds > 210)
                         {
                             bool hasDeepScan;
                             lock (item.Fingerprints) {
-                                hasDeepScan = item.Fingerprints.Any(f => Math.Abs(f.TimeSec - 350) < 5 || Math.Abs((item.Duration.TotalSeconds - f.TimeSec) - 350) < 5);
+                                hasDeepScan = item.Fingerprints.Any(f => Math.Abs(f.TimeSec - 200) < 5 || Math.Abs((item.Duration.TotalSeconds - f.TimeSec) - 200) < 5);
                             }
                             
                             if (!hasDeepScan)
                             {
                                 await ioThrottle.WaitAsync(ct);
-                                try { await FFmpegHelper.ExtractCombinedFingerprintsAsync(item, 350, item.Duration.TotalSeconds - 350, ct, timeoutMs); }
+                                try { await FFmpegHelper.ExtractCombinedFingerprintsAsync(item, 200, item.Duration.TotalSeconds - 200, ct, timeoutMs); }
                                 finally { ioThrottle.Release(); }
                                 
                                 string cacheKey = item.CacheKey;
@@ -930,7 +930,7 @@ namespace FastDupeFinder
                     {
                         bool hasDeep = false;
                         lock(item.Fingerprints) {
-                            hasDeep = item.Fingerprints.Any(f => Math.Abs(f.TimeSec - 350) < 5 || Math.Abs((item.Duration.TotalSeconds - f.TimeSec) - 350) < 5);
+                            hasDeep = item.Fingerprints.Any(f => Math.Abs(f.TimeSec - 200) < 5 || Math.Abs((item.Duration.TotalSeconds - f.TimeSec) - 200) < 5);
                         }
                         if (hasDeep) longs.Add(item);
                         else shorts.Add(item);

@@ -32,11 +32,11 @@ namespace FastDupeFinder
             return (0, -1, -1, FingerprintPosition.Unknown, FingerprintPosition.Unknown);
         }
 
-        // 💡 判斷兩部「長片」是否在深度特徵 (350 或 -350) 上吻合
+        // 💡 判斷兩部「長片」是否在深度特徵 (200 或 -200) 上吻合
         public static bool IsDeepMatch(DupeFileItem f1, DupeFileItem f2)
         {
-            var deepFp1 = f1.Fingerprints.Where(f => Math.Abs(f.TimeSec - 350) < 5 || Math.Abs((f1.Duration.TotalSeconds - f.TimeSec) - 350) < 5).ToList();
-            var deepFp2 = f2.Fingerprints.Where(f => Math.Abs(f.TimeSec - 350) < 5 || Math.Abs((f2.Duration.TotalSeconds - f.TimeSec) - 350) < 5).ToList();
+            var deepFp1 = f1.Fingerprints.Where(f => Math.Abs(f.TimeSec - 200) < 5 || Math.Abs((f1.Duration.TotalSeconds - f.TimeSec) - 200) < 5).ToList();
+            var deepFp2 = f2.Fingerprints.Where(f => Math.Abs(f.TimeSec - 200) < 5 || Math.Abs((f2.Duration.TotalSeconds - f.TimeSec) - 200) < 5).ToList();
 
             if (deepFp1.Count == 0 || deepFp2.Count == 0) return true; // 若未含深度特徵則不視為衝突
 
@@ -55,12 +55,12 @@ namespace FastDupeFinder
             return false; // 完全沒有深層吻合 -> 不同集數，踢出/分離
         }
 
-        // 💡 嚴格深度比對：找出 350 或 -350 的特徵，如果有任何一個深度特徵吻合即判定相同
+        // 💡 嚴格深度比對：找出 200 或 -200 的特徵，如果有任何一個深度特徵吻合即判定相同
         public static (int Score, double Sec1, double Sec2, FingerprintPosition Pos1, FingerprintPosition Pos2) CompareDeep(
             DupeFileItem f1, DupeFileItem f2)
         {
-            var deepFp1 = f1.Fingerprints.Where(f => Math.Abs(f.TimeSec - 350) < 5 || Math.Abs((f1.Duration.TotalSeconds - f.TimeSec) - 350) < 5).ToList();
-            var deepFp2 = f2.Fingerprints.Where(f => Math.Abs(f.TimeSec - 350) < 5 || Math.Abs((f2.Duration.TotalSeconds - f.TimeSec) - 350) < 5).ToList();
+            var deepFp1 = f1.Fingerprints.Where(f => Math.Abs(f.TimeSec - 200) < 5 || Math.Abs((f1.Duration.TotalSeconds - f.TimeSec) - 200) < 5).ToList();
+            var deepFp2 = f2.Fingerprints.Where(f => Math.Abs(f.TimeSec - 200) < 5 || Math.Abs((f2.Duration.TotalSeconds - f.TimeSec) - 200) < 5).ToList();
 
             if (deepFp1.Count == 0 || deepFp2.Count == 0) return (0, -1, -1, FingerprintPosition.Unknown, FingerprintPosition.Unknown);
 
