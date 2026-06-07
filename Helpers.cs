@@ -179,7 +179,7 @@ namespace FastDupeFinder
             byte[]? imageBytes = await RunCommandAndGetOutputAsync(args, ffmpegTimeoutMs, ct);
             if (imageBytes != null && imageBytes.Length == 256)
             {
-                if (ScanEngine.CalculateSingleHashVariantsFromMemory(imageBytes, out var deepVariants))
+                if (ScanEngine.CalculateSingleHashVariantsFromMemory(imageBytes, out var deepVariants) && deepVariants != null)
                 {
                     lock (item.Fingerprints)
                     {
