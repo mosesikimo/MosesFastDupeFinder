@@ -127,16 +127,18 @@ namespace FastDupeFinder
             return null;
         }
 
+        // 💡 Phase 1: 極速 16x16 雙併抽幀 (保留單一階段的精簡，但產生高精度指紋)
         public static async Task ExtractCombinedFingerprintsAsync(DupeFileItem item, double headSec, double tailSec, CancellationToken ct, int ffmpegTimeoutMs)
         {
             string rwTimeout = "3000000";
+            // 使用 scale=16:16 產生 512 bytes 的純記憶體輸出
             string args = $"-rw_timeout {rwTimeout} -v quiet -noaccurate_seek -threads 1 " +
                $"-ss {headSec} -i \"{item.FilePath}\" -ss {tailSec} -i \"{item.FilePath}\" " +
-               $"-filter_complex \"[0:v]scale=8:8,setsar=1,format=gray[l];[1:v]scale=8:8,setsar=1,format=gray[r];[l][r]hstack,format=gray\" " +
+               $"-an -sn -dn -filter_complex \"[0:v]scale=16:16,setsar=1,format=gray[l];[1:v]scale=16:16,setsar=1,format=gray[r];[l][r]hstack,format=gray\" " +
                $"-frames:v 1 -f rawvideo pipe:1";
 
             byte[]? imageBytes = await RunCommandAndGetOutputAsync(args, ffmpegTimeoutMs, ct);
-            if (imageBytes != null && imageBytes.Length == 128)
+            if (imageBytes != null && imageBytes.Length == 512)
             {
                 if (ScanEngine.CalculateCombinedHashVariantsFromMemory(imageBytes, out var headVariants, out var tailVariants))
                 {
@@ -149,17 +151,48 @@ namespace FastDupeFinder
                 }
             }
 
+            // Fallback：單獨抽 16x16 (256 bytes)
             string fallbackArgs = $"-rw_timeout {rwTimeout} -v quiet -noaccurate_seek -threads 1 " +
-               $"-ss {headSec} -i \"{item.FilePath}\" -vf \"scale=8:8,setsar=1,format=gray\" -frames:v 1 -f rawvideo pipe:1";
+               $"-ss {headSec} -i \"{item.FilePath}\" -an -sn -dn -vf \"scale=16:16,setsar=1,format=gray\" -frames:v 1 -f rawvideo pipe:1";
 
             byte[]? headOnlyBytes = await RunCommandAndGetOutputAsync(fallbackArgs, ffmpegTimeoutMs, ct);
-            if (headOnlyBytes != null && headOnlyBytes.Length == 64)
+            if (headOnlyBytes != null && headOnlyBytes.Length == 256)
             {
                 if (ScanEngine.CalculateSingleHashVariantsFromMemory(headOnlyBytes, out var headOnlyVariants))
                 {
                     lock (item.Fingerprints)
                     {
                         if (headOnlyVariants != null) item.Fingerprints.Add(new VideoFingerprint(headOnlyVariants, headSec, FingerprintPosition.Head));
+                    }
+                }
+            }
+        }
+
+        // 💡 補回 Phase 2: 獨立高精度 16x16 深度特徵抽幀
+        public static async Task ExtractDeepFingerprintAsync(DupeFileItem item, double targetSec, CancellationToken ct, int ffmpegTimeoutMs)
+        {
+            string rwTimeout = "3000000";
+            string args = $"-rw_timeout {rwTimeout} -v quiet -noaccurate_seek -threads 1 " +
+               $"-ss {targetSec} -i \"{item.FilePath}\" -an -sn -dn " +
+               $"-vf \"scale=16:16,setsar=1,format=gray\" -frames:v 1 -f rawvideo pipe:1";
+
+            byte[]? imageBytes = await RunCommandAndGetOutputAsync(args, ffmpegTimeoutMs, ct);
+            if (imageBytes != null && imageBytes.Length == 256)
+            {
+                if (ScanEngine.CalculateSingleHashVariantsFromMemory(imageBytes, out var deepVariants))
+                {
+                    lock (item.Fingerprints)
+                    {
+                        var fp = item.Fingerprints.FirstOrDefault(f => f.Position == FingerprintPosition.Deep);
+                        if (fp != null)
+                        {
+                            fp.Hashes = deepVariants; // 直接覆寫
+                            fp.TimeSec = targetSec;
+                        }
+                        else
+                        {
+                            item.Fingerprints.Add(new VideoFingerprint(deepVariants, targetSec, FingerprintPosition.Deep));
+                        }
                     }
                 }
             }
@@ -276,7 +309,7 @@ namespace FastDupeFinder
             TimeSpan? finalDuration = null;
             uint? width = 0, height = 0;
 
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < 2; i++)
             {
                 try
                 {
@@ -289,13 +322,19 @@ namespace FastDupeFinder
                         finalDuration = TimeSpan.FromTicks((long)durationTicks.Value);
                     break;
                 }
-                catch { if (i < 2) await Task.Delay(200, ct); }
+                catch { if (i < 1) await Task.Delay(100, ct); }
             }
 
             if (!finalDuration.HasValue || finalDuration.Value.TotalSeconds <= 0)
             {
-                if (!skipFfmpegFallback) finalDuration = await FFmpegHelper.GetDurationAsync(filePath, ct);
-                else finalDuration = TimeSpan.FromSeconds(0.1);
+                if (skipFfmpegFallback) 
+                {
+                    finalDuration = TimeSpan.FromSeconds(0.1);
+                }
+                else
+                {
+                    finalDuration = await FFmpegHelper.GetDurationAsync(filePath, ct);
+                }
             }
 
             if (finalDuration.HasValue && finalDuration.Value.TotalSeconds > 0)

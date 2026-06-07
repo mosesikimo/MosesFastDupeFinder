@@ -21,13 +21,13 @@ namespace FastDupeFinder
     public class PipelineConfig
     {
         public int Cpu { get; }
-        public bool IsSsd { get; }
+        // 💡 永遠將磁碟視為 HDD (傳統硬碟)，採取最穩定的 I/O 降載策略
+        public bool IsSsd { get; } = false; 
         public long AvailableMemoryMb { get; }
 
         public PipelineConfig()
         {
             Cpu = Environment.ProcessorCount;
-            IsSsd = DetectSsdDrive();
             AvailableMemoryMb = GC.GetTotalMemory(false) / (1024 * 1024);
         }
 
@@ -42,19 +42,16 @@ namespace FastDupeFinder
             }
         }
 
-        public int MetadataBuffer => (AvailableMemoryMb < 2048) ? Cpu * 25 : Cpu * 50;
-        public int MetadataParallelism => Cpu * 2;
+        // 💡 HDD 優化：Metadata 解析雖然很快，但也不能瞬間全開導致磁頭亂飛
+        public int MetadataBuffer => (AvailableMemoryMb < 2048) ? Cpu * 30 : Cpu * 60;
+        public int MetadataParallelism => Math.Min(Cpu * 2, 8); 
+
         public int PipelineSlots => 2000;
+        
+        // 💡 HDD 優化：將 FFmpeg 同時讀取的數量嚴格限制在 2~3 個，保護磁碟壽命並最大化循序讀取效益
+        public int FfmpegIoLimit => Math.Min(3, Math.Max(2, Cpu / 4));
 
-        public int FfmpegIoLimit => Math.Min(IsSsd ? 8 : 4, Math.Max(2, Cpu / 2));
-
-        private bool DetectSsdDrive()
-        {
-            try { var driveInfo = new DriveInfo("C:\\"); return true; }
-            catch { return true; }
-        }
-
-        public override string ToString() => $"[Pipeline] CPU:{Cpu} | FileBuffer:{FileBuffer} | MetaBuffer:{MetadataBuffer} | PipelineSlots:{PipelineSlots} | FfmpegIO:{FfmpegIoLimit} | IsSSD:{IsSsd}";
+        public override string ToString() => $"[Pipeline] CPU:{Cpu} | FileBuffer:{FileBuffer} | MetaBuffer:{MetadataBuffer} | PipelineSlots:{PipelineSlots} | FfmpegIO:{FfmpegIoLimit} | IsHDD:True";
     }
 
     public class AppSettings
@@ -133,15 +130,16 @@ namespace FastDupeFinder
         }
     }
 
-    public enum FingerprintPosition { Head, Tail, Unknown }
+    public enum FingerprintPosition { Head, Tail, Deep, Unknown }
 
     public class VideoFingerprint
     {
-        public List<ulong> Hashes { get; set; }
+        public List<ulong[]> Hashes { get; set; }
+        
         public double TimeSec { get; set; }
         public FingerprintPosition Position { get; set; }
 
-        public VideoFingerprint(List<ulong> hashes, double timeSec, FingerprintPosition position = FingerprintPosition.Unknown)
+        public VideoFingerprint(List<ulong[]> hashes, double timeSec, FingerprintPosition position = FingerprintPosition.Unknown)
         {
             Hashes = hashes;
             TimeSec = timeSec;
