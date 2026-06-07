@@ -22,6 +22,7 @@ namespace FastDupeFinder
             DefaultValue = defaultValue;
         }
 
+        /// <summary>WPF 標記擴展提供值: 綁定到 I18nManager 索引器實現動態多語言</summary>
         public override object ProvideValue(IServiceProvider serviceProvider)
         {
             return new Binding($"[{Key}]")
@@ -312,12 +313,14 @@ namespace FastDupeFinder
             {"StatusTime", " (Time: {0}m {1}s)"} 
         };
 
+        /// <summary>初始化國際化管理器: 加載當前語言的所有文本字典</summary>
         public void Init()
         {
             CurrentLanguage = "zh-TW";
             _dict = new Dictionary<string, string>(); 
         }
-
+/// <summary>語言切換: 繁體/英文互切，觸發 LanguageChanged 事件通知所有 UI 更新</summary>
+        
         public void ToggleLanguage()
         {
             if (CurrentLanguage == "zh-TW")
@@ -336,11 +339,13 @@ namespace FastDupeFinder
         }
 
         public string? this[string key] => _dict.TryGetValue(key, out var val) ? val : null;
-
+/// <summary>字符串查詢: 根據 key 返回翻譯文本，找不到時返回 defaultValue</summary>
+        
         public string GetString(string key, string defaultValue)
         {
             _templateDict.TryAdd(key, defaultValue); 
             return _dict.TryGetValue(key, out var val) ? val : defaultValue;
+        /// <summary>模板導出: 產生翻譯文本模板 JSON，便於協力者補充多語言</summary>
         }
 
         public void ExportTemplate()

@@ -2,82 +2,146 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Runtime.CompilerServices; // 💡 引入底層硬體指標操控
+using System.Runtime.InteropServices; // 💡 引入記憶體直接存取
 
 namespace FastDupeFinder
 {
     public static class SimilarityEngine
     {
-        // 第一階段的基礎比對：只需 100秒 或 -100秒 的其中一個變體吻合即可
-        public static (int Score, double Sec1, double Sec2, FingerprintPosition Pos1, FingerprintPosition Pos2) Compare(
-            DupeFileItem f1, DupeFileItem f2, FingerprintPosition requiredPosition = FingerprintPosition.Unknown)
+        private static (int Score, double Sec1, double Sec2, FingerprintPosition Pos1, FingerprintPosition Pos2) CompareInternal(
+            DupeFileItem f1, DupeFileItem f2, FingerprintPosition requiredPosition)
         {
-            var fps1 = f1.Fingerprints.Where(f => requiredPosition == FingerprintPosition.Unknown || f.Position == requiredPosition);
-            var fps2 = f2.Fingerprints.Where(f => requiredPosition == FingerprintPosition.Unknown || f.Position == requiredPosition);
+            VideoFingerprint? fp1_head = null, fp1_tail = null;
+            VideoFingerprint? fp2_head = null, fp2_tail = null;
 
-            foreach (var fp1 in fps1)
+            foreach (var fp in f1.Fingerprints)
             {
-                foreach (var fp2 in fps2)
-                {
-                    if (fp1.Position != fp2.Position) continue;
+                if (fp.Position == FingerprintPosition.Head) fp1_head = fp;
+                else if (fp.Position == FingerprintPosition.Tail) fp1_tail = fp;
+            }
 
+            foreach (var fp in f2.Fingerprints)
+            {
+                if (fp.Position == FingerprintPosition.Head) fp2_head = fp;
+                else if (fp.Position == FingerprintPosition.Tail) fp2_tail = fp;
+            }
+
+            if (requiredPosition == FingerprintPosition.Head && fp1_head != null && fp2_head != null)
+            {
+                // 💡 硬體級優化：直接取得記憶體指標，徹底消除 C# 陣列邊界檢查 (Bounds Checking)
+                ref ulong p1 = ref MemoryMarshal.GetArrayDataReference(fp1_head.Hashes[0]);
+                for (int v = 0; v < 8; v++)
+                {
+                    ref ulong p2 = ref MemoryMarshal.GetArrayDataReference(fp2_head.Hashes[v]);
+                    int diff = BitOperations.PopCount(p1 ^ p2)
+                             + BitOperations.PopCount(Unsafe.Add(ref p1, 1) ^ Unsafe.Add(ref p2, 1))
+                             + BitOperations.PopCount(Unsafe.Add(ref p1, 2) ^ Unsafe.Add(ref p2, 2))
+                             + BitOperations.PopCount(Unsafe.Add(ref p1, 3) ^ Unsafe.Add(ref p2, 3));
+                    if (diff <= 3)
+                        return (100, fp1_head.TimeSec, fp2_head.TimeSec, FingerprintPosition.Head, FingerprintPosition.Head);
+                }
+            }
+            else if (requiredPosition == FingerprintPosition.Tail && fp1_tail != null && fp2_tail != null)
+            {
+                ref ulong p1 = ref MemoryMarshal.GetArrayDataReference(fp1_tail.Hashes[0]);
+                for (int v = 0; v < 8; v++)
+                {
+                    ref ulong p2 = ref MemoryMarshal.GetArrayDataReference(fp2_tail.Hashes[v]);
+                    int diff = BitOperations.PopCount(p1 ^ p2)
+                             + BitOperations.PopCount(Unsafe.Add(ref p1, 1) ^ Unsafe.Add(ref p2, 1))
+                             + BitOperations.PopCount(Unsafe.Add(ref p1, 2) ^ Unsafe.Add(ref p2, 2))
+                             + BitOperations.PopCount(Unsafe.Add(ref p1, 3) ^ Unsafe.Add(ref p2, 3));
+                    if (diff <= 3)
+                        return (100, fp1_tail.TimeSec, fp2_tail.TimeSec, FingerprintPosition.Tail, FingerprintPosition.Tail);
+                }
+            }
+            else if (requiredPosition == FingerprintPosition.Unknown)
+            {
+                if (fp1_head != null && fp2_head != null)
+                {
+                    ref ulong p1 = ref MemoryMarshal.GetArrayDataReference(fp1_head.Hashes[0]);
                     for (int v = 0; v < 8; v++)
                     {
-                        if (BitOperations.PopCount(fp1.Hashes[0] ^ fp2.Hashes[v]) == 0)
-                        {
-                            return (100, fp1.TimeSec, fp2.TimeSec, fp1.Position, fp2.Position);
-                        }
+                        ref ulong p2 = ref MemoryMarshal.GetArrayDataReference(fp2_head.Hashes[v]);
+                        int diff = BitOperations.PopCount(p1 ^ p2)
+                                 + BitOperations.PopCount(Unsafe.Add(ref p1, 1) ^ Unsafe.Add(ref p2, 1))
+                                 + BitOperations.PopCount(Unsafe.Add(ref p1, 2) ^ Unsafe.Add(ref p2, 2))
+                                 + BitOperations.PopCount(Unsafe.Add(ref p1, 3) ^ Unsafe.Add(ref p2, 3));
+                        if (diff <= 3)
+                            return (100, fp1_head.TimeSec, fp2_head.TimeSec, FingerprintPosition.Head, FingerprintPosition.Head);
+                    }
+                }
+
+                if (fp1_tail != null && fp2_tail != null)
+                {
+                    ref ulong p1 = ref MemoryMarshal.GetArrayDataReference(fp1_tail.Hashes[0]);
+                    for (int v = 0; v < 8; v++)
+                    {
+                        ref ulong p2 = ref MemoryMarshal.GetArrayDataReference(fp2_tail.Hashes[v]);
+                        int diff = BitOperations.PopCount(p1 ^ p2)
+                                 + BitOperations.PopCount(Unsafe.Add(ref p1, 1) ^ Unsafe.Add(ref p2, 1))
+                                 + BitOperations.PopCount(Unsafe.Add(ref p1, 2) ^ Unsafe.Add(ref p2, 2))
+                                 + BitOperations.PopCount(Unsafe.Add(ref p1, 3) ^ Unsafe.Add(ref p2, 3));
+                        if (diff <= 3)
+                            return (100, fp1_tail.TimeSec, fp2_tail.TimeSec, FingerprintPosition.Tail, FingerprintPosition.Tail);
                     }
                 }
             }
+
             return (0, -1, -1, FingerprintPosition.Unknown, FingerprintPosition.Unknown);
         }
 
-        // 💡 判斷兩部「長片」是否在深度特徵 (200 或 -200) 上吻合
-        public static bool IsDeepMatch(DupeFileItem f1, DupeFileItem f2)
+        public static (int Score, double Sec1, double Sec2, FingerprintPosition Pos1, FingerprintPosition Pos2) Compare(
+            DupeFileItem f1, DupeFileItem f2, FingerprintPosition requiredPosition = FingerprintPosition.Unknown)
         {
-            var deepFp1 = f1.Fingerprints.Where(f => Math.Abs(f.TimeSec - 200) < 5 || Math.Abs((f1.Duration.TotalSeconds - f.TimeSec) - 200) < 5).ToList();
-            var deepFp2 = f2.Fingerprints.Where(f => Math.Abs(f.TimeSec - 200) < 5 || Math.Abs((f2.Duration.TotalSeconds - f.TimeSec) - 200) < 5).ToList();
-
-            if (deepFp1.Count == 0 || deepFp2.Count == 0) return true; // 若未含深度特徵則不視為衝突
-
-            foreach (var fp1 in deepFp1)
-            {
-                foreach (var fp2 in deepFp2)
-                {
-                    if (fp1.Position != fp2.Position) continue;
-                    
-                    for (int v = 0; v < 8; v++)
-                    {
-                        if (BitOperations.PopCount(fp1.Hashes[0] ^ fp2.Hashes[v]) == 0) return true; 
-                    }
-                }
-            }
-            return false; // 完全沒有深層吻合 -> 不同集數，踢出/分離
+            return CompareInternal(f1, f2, requiredPosition);
         }
 
-        // 💡 嚴格深度比對：找出 200 或 -200 的特徵，如果有任何一個深度特徵吻合即判定相同
+        public static bool IsDeepMatch(DupeFileItem f1, DupeFileItem f2)
+        {
+            VideoFingerprint? fp1_deep = null, fp2_deep = null;
+            foreach (var f in f1.Fingerprints) if (f.Position == FingerprintPosition.Deep) { fp1_deep = f; break; }
+            foreach (var f in f2.Fingerprints) if (f.Position == FingerprintPosition.Deep) { fp2_deep = f; break; }
+
+            if (fp1_deep == null || fp2_deep == null) return true;
+
+            // 💡 硬體級優化
+            ref ulong p1 = ref MemoryMarshal.GetArrayDataReference(fp1_deep.Hashes[0]);
+            for (int v = 0; v < 8; v++)
+            {
+                ref ulong p2 = ref MemoryMarshal.GetArrayDataReference(fp2_deep.Hashes[v]);
+                int diff = BitOperations.PopCount(p1 ^ p2)
+                         + BitOperations.PopCount(Unsafe.Add(ref p1, 1) ^ Unsafe.Add(ref p2, 1))
+                         + BitOperations.PopCount(Unsafe.Add(ref p1, 2) ^ Unsafe.Add(ref p2, 2))
+                         + BitOperations.PopCount(Unsafe.Add(ref p1, 3) ^ Unsafe.Add(ref p2, 3));
+                
+                if (diff <= 3) return true;
+            }
+            return false;
+        }
+
         public static (int Score, double Sec1, double Sec2, FingerprintPosition Pos1, FingerprintPosition Pos2) CompareDeep(
             DupeFileItem f1, DupeFileItem f2)
         {
-            var deepFp1 = f1.Fingerprints.Where(f => Math.Abs(f.TimeSec - 200) < 5 || Math.Abs((f1.Duration.TotalSeconds - f.TimeSec) - 200) < 5).ToList();
-            var deepFp2 = f2.Fingerprints.Where(f => Math.Abs(f.TimeSec - 200) < 5 || Math.Abs((f2.Duration.TotalSeconds - f.TimeSec) - 200) < 5).ToList();
+            VideoFingerprint? fp1_deep = null, fp2_deep = null;
+            foreach (var f in f1.Fingerprints) if (f.Position == FingerprintPosition.Deep) { fp1_deep = f; break; }
+            foreach (var f in f2.Fingerprints) if (f.Position == FingerprintPosition.Deep) { fp2_deep = f; break; }
 
-            if (deepFp1.Count == 0 || deepFp2.Count == 0) return (0, -1, -1, FingerprintPosition.Unknown, FingerprintPosition.Unknown);
+            if (fp1_deep == null || fp2_deep == null) return (0, -1, -1, FingerprintPosition.Unknown, FingerprintPosition.Unknown);
 
-            foreach (var fp1 in deepFp1)
+            // 💡 硬體級優化
+            ref ulong p1 = ref MemoryMarshal.GetArrayDataReference(fp1_deep.Hashes[0]);
+            for (int v = 0; v < 8; v++)
             {
-                foreach (var fp2 in deepFp2)
-                {
-                    if (fp1.Position != fp2.Position) continue;
-                    
-                    for (int v = 0; v < 8; v++)
-                    {
-                        if (BitOperations.PopCount(fp1.Hashes[0] ^ fp2.Hashes[v]) == 0)
-                        {
-                            return (100, fp1.TimeSec, fp2.TimeSec, fp1.Position, fp2.Position);
-                        }
-                    }
-                }
+                ref ulong p2 = ref MemoryMarshal.GetArrayDataReference(fp2_deep.Hashes[v]);
+                int diff = BitOperations.PopCount(p1 ^ p2)
+                         + BitOperations.PopCount(Unsafe.Add(ref p1, 1) ^ Unsafe.Add(ref p2, 1))
+                         + BitOperations.PopCount(Unsafe.Add(ref p1, 2) ^ Unsafe.Add(ref p2, 2))
+                         + BitOperations.PopCount(Unsafe.Add(ref p1, 3) ^ Unsafe.Add(ref p2, 3));
+                
+                if (diff <= 3)
+                    return (100, fp1_deep.TimeSec, fp2_deep.TimeSec, FingerprintPosition.Deep, FingerprintPosition.Deep);
             }
             return (0, -1, -1, FingerprintPosition.Unknown, FingerprintPosition.Unknown);
         }
@@ -127,17 +191,15 @@ namespace FastDupeFinder
         public static List<List<DupeFileItem>> GroupFiles(List<DupeFileItem> files)
         {
             return GroupFilesByPredicate(files, (f1, f2) => 
-                SimilarityEngine.Compare(f1, f2, FingerprintPosition.Head).Score == 100 || 
-                SimilarityEngine.Compare(f1, f2, FingerprintPosition.Tail).Score == 100);
+                SimilarityEngine.Compare(f1, f2, FingerprintPosition.Unknown).Score == 100);
         }
 
-        // 💡 補回 missing 的深度群組分離函數
         public static List<List<DupeFileItem>> GroupLongsByDeepFeature(List<DupeFileItem> longs)
         {
             return GroupFilesByPredicate(longs, SimilarityEngine.IsDeepMatch);
         }
 
-        public static List<DupeFileItem> AssignGroupMetadata(List<DupeFileItem> group, int displayGroupId, bool isPhase2)
+        public static List<DupeFileItem> AssignGroupMetadata(List<DupeFileItem> group, int displayGroupId, bool isPhase2 = false)
         {
             Func<DupeFileItem, DupeFileItem, (int Score, double Sec1, double Sec2, FingerprintPosition Pos1, FingerprintPosition Pos2)> compareFunc = 
                 isPhase2 ? SimilarityEngine.CompareDeep : (f1, f2) => SimilarityEngine.Compare(f1, f2, FingerprintPosition.Unknown);
@@ -171,7 +233,9 @@ namespace FastDupeFinder
                     item.MatchSeconds = match.Sec2;
                     item.MatchDetail = match.Pos1 == FingerprintPosition.Head ? 
                         I18nManager.Instance.GetString("TxtHeadMatch", "頭部 {0}秒").Replace("{0}", ((int)match.Sec1).ToString()) :
-                        I18nManager.Instance.GetString("TxtTailMatch", "尾部 {0}秒").Replace("{0}", ((int)match.Sec1).ToString());
+                        (match.Pos1 == FingerprintPosition.Deep ? 
+                        I18nManager.Instance.GetString("TxtDeepMatch", "深度特徵 {0}秒").Replace("{0}", ((int)match.Sec1).ToString()) :
+                        I18nManager.Instance.GetString("TxtTailMatch", "尾部 {0}秒").Replace("{0}", ((int)match.Sec1).ToString()));
                 }
                 else if (isPhase2)
                 {
@@ -189,70 +253,72 @@ namespace FastDupeFinder
             return sorted;
         }
 
-        // --- 8x8 Feature Calculation (純記憶體轉換) ---
-        public static bool CalculateCombinedHashVariantsFromMemory(byte[] imageData, out List<ulong>? headVariants, out List<ulong>? tailVariants)
+        public static bool CalculateCombinedHashVariantsFromMemory(byte[] imageData, out List<ulong[]>? headVariants, out List<ulong[]>? tailVariants)
         {
             headVariants = null; tailVariants = null;
-            if (imageData == null || imageData.Length != 128) return false;
+            if (imageData == null || imageData.Length != 512) return false;
 
-            int[] leftGrays = new int[64], rightGrays = new int[64];
+            Span<int> leftGrays = stackalloc int[256];
+            Span<int> rightGrays = stackalloc int[256];
             int leftTotal = 0, rightTotal = 0;
 
-            for (int y = 0; y < 8; y++)
+            for (int y = 0; y < 16; y++)
             {
-                int rowStart = y * 16;
-                for (int x = 0; x < 8; x++)
+                int rowStart = y * 32;
+                for (int x = 0; x < 16; x++)
                 {
-                    byte grayLeft = imageData[rowStart + x], grayRight = imageData[rowStart + 8 + x];
-                    int idx = y * 8 + x;
+                    byte grayLeft = imageData[rowStart + x], grayRight = imageData[rowStart + 16 + x];
+                    int idx = y * 16 + x;
                     leftGrays[idx] = grayLeft; rightGrays[idx] = grayRight;
                     leftTotal += grayLeft; rightTotal += grayRight;
                 }
             }
 
-            headVariants = new List<ulong>(8);
-            Generate8x8VariantsInline(leftGrays, leftTotal / 64, headVariants);
+            headVariants = new List<ulong[]>(8);
+            Generate16x16VariantsInline(leftGrays, leftTotal / 256, headVariants);
             
-            tailVariants = new List<ulong>(8);
-            Generate8x8VariantsInline(rightGrays, rightTotal / 64, tailVariants);
+            tailVariants = new List<ulong[]>(8);
+            Generate16x16VariantsInline(rightGrays, rightTotal / 256, tailVariants);
             return true;
         }
 
-        public static bool CalculateSingleHashVariantsFromMemory(byte[] imageData, out List<ulong>? variants)
+        public static bool CalculateSingleHashVariantsFromMemory(byte[] imageData, out List<ulong[]>? variants)
         {
             variants = null;
-            if (imageData == null || imageData.Length != 64) return false;
+            if (imageData == null || imageData.Length != 256) return false;
 
-            int[] grays = new int[64];
+            Span<int> grays = stackalloc int[256];
             int total = 0;
-            for (int i = 0; i < 64; i++) { grays[i] = imageData[i]; total += imageData[i]; }
+            for (int i = 0; i < 256; i++) { grays[i] = imageData[i]; total += imageData[i]; }
 
-            variants = new List<ulong>(8);
-            Generate8x8VariantsInline(grays, total / 64, variants);
+            variants = new List<ulong[]>(8);
+            Generate16x16VariantsInline(grays, total / 256, variants);
             return true;
         }
 
-        private static void Generate8x8VariantsInline(int[] pixels, int avg, List<ulong> list)
+        private static void Generate16x16VariantsInline(ReadOnlySpan<int> pixels, int avg, List<ulong[]> list)
         {
             for (int v = 0; v < 8; v++)
             {
-                ulong h = 0;
-                for (int y = 0; y < 8; y++)
+                ulong[] h = new ulong[4]; 
+                for (int y = 0; y < 16; y++)
                 {
-                    for (int x = 0; x < 8; x++)
+                    for (int x = 0; x < 16; x++)
                     {
                         int srcX = x, srcY = y;
                         switch (v)
                         {
-                            case 1: srcX = 7 - x; break;
-                            case 2: srcY = 7 - y; break;
-                            case 3: srcX = 7 - x; srcY = 7 - y; break;
+                            case 1: srcX = 15 - x; break;
+                            case 2: srcY = 15 - y; break;
+                            case 3: srcX = 15 - x; srcY = 15 - y; break;
                             case 4: srcX = y; srcY = x; break;
-                            case 5: srcX = y; srcY = 7 - x; break;
-                            case 6: srcX = 7 - y; srcY = x; break;
-                            case 7: srcX = 7 - y; srcY = 7 - x; break;
+                            case 5: srcX = y; srcY = 15 - x; break;
+                            case 6: srcX = 15 - y; srcY = x; break;
+                            case 7: srcX = 15 - y; srcY = 15 - x; break;
                         }
-                        if (pixels[srcY * 8 + srcX] >= avg) h |= (1UL << (63 - (y * 8 + x)));
+                        int idx = y * 16 + x;
+                        if (pixels[srcY * 16 + srcX] >= avg)
+                            h[idx / 64] |= (1UL << (63 - (idx % 64)));
                     }
                 }
                 list.Add(h);

@@ -5,7 +5,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;                  // 💡 補回 Encoding
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -13,7 +13,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;         
 using System.Windows.Media.Imaging; 
-using Microsoft.Win32;              // 💡 補回 OpenFolderDialog
+using Microsoft.Win32;              
 using System.Text.Json;
 using System.Threading.Channels; 
 using Microsoft.WindowsAPICodePack.Shell; 
@@ -135,7 +135,7 @@ namespace FastDupeFinder
         {
             try
             {
-                string cachePath = Path.Combine(AppContext.BaseDirectory, "fingerprint_cache.json");
+                string cachePath = Path.Combine(AppContext.BaseDirectory, "fingerprint_cache_v3.json");
                 if (File.Exists(cachePath))
                 {
                     string json = File.ReadAllText(cachePath, Encoding.UTF8);
@@ -150,7 +150,7 @@ namespace FastDupeFinder
         {
             try
             {
-                string cachePath = Path.Combine(AppContext.BaseDirectory, "fingerprint_cache.json");
+                string cachePath = Path.Combine(AppContext.BaseDirectory, "fingerprint_cache_v3.json");
                 string json = JsonSerializer.Serialize(_fingerprintCache.ToDictionary(kvp => kvp.Key, kvp => kvp.Value));
                 File.WriteAllText(cachePath, json, Encoding.UTF8);
             }
@@ -623,7 +623,7 @@ namespace FastDupeFinder
         }
 
         // =========================================================================================
-        // 極速管線化掃描引擎 (Phase 1 + Phase 2 Orchestration)
+        // 極速管線化掃描引擎 (UI 節流優化版)
         // =========================================================================================
         private async Task<List<DupeFileItem>> PerformScanAsync(
             string pathStr, string excludePathStr, bool includeSubDir, string minSizeStr, string minLengthStr,
@@ -631,6 +631,9 @@ namespace FastDupeFinder
         {
             var cfg = new PipelineConfig();
             progress.Report(Loc("ProgStart", "⚡ 啟動全記憶體非同步管線 (配置: ") + cfg + ")");
+
+            // 💡 核心優化：建立硬體計時器，強制 UI 永遠 5 秒才更新一次，解鎖 I/O 狂奔極限
+            var uiStopwatch = Stopwatch.StartNew();
 
             var paths = pathStr.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries).Select(p => p.Trim()).Where(p => Directory.Exists(p)).ToList();
             var excludes = excludePathStr.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries).Select(p => p.Trim()).ToList();
@@ -642,85 +645,147 @@ namespace FastDupeFinder
             long minSizeBytes = sizeMB * 1024 * 1024;
             double minLengthSec = minLengthMin * 60;
 
-            var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(cfg.FileBuffer) { SingleWriter = true, FullMode = BoundedChannelFullMode.Wait });
-            var metadataChannel = Channel.CreateBounded<DupeFileItem>(new BoundedChannelOptions(cfg.MetadataBuffer) { FullMode = BoundedChannelFullMode.Wait });
-
             var finalResultsBag = new ConcurrentBag<DupeFileItem>();
             var failedFilesBag = new ConcurrentBag<DupeFileItem>(); 
-
-            var enumOptions = new EnumerationOptions { IgnoreInaccessible = true, ReturnSpecialDirectories = false };
 
             int statsFound = 0, statsMetaProcessed = 0, statsFfmpegProcessed = 0;
             int statsCacheHits = 0, statsExtractFailed = 0, statsSkippedLocked = 0, statsSkippedShort = 0; 
 
             Action<int, int, int, int, int, int, int> ReportProg = (fnd, meta, ffmpeg, cache, fail, lck, shrt) => {
+                // 💡 嚴格限制：不到 5 秒絕對不准更新畫面，將跨執行緒負擔降到 0
+                if (uiStopwatch.ElapsedMilliseconds < 5000) return; 
+                
                 string failMsg = fail > 0 ? Loc("ProgFail", " | ⚠️ ") + $"{fail} " + Loc("ProgTimeout", "逾時/損壞") : "";
                 string lockMsg = lck > 0 ? Loc("ProgLock", " | 🔒 ") + $"{lck} " + Loc("ProgDl", "下載中") : "";
                 string shortMsg = shrt > 0 ? Loc("ProgShort", " | ⏭️ ") + $"{shrt} " + Loc("ProgSkipShort", "太短略過") : "";
                 progress.Report(string.Format(Loc("ProgStats", "搜尋: {0} 檔 | 解析: {1} 檔 | 獲取: {2} 特徵 | 快取: {3} 次"), fnd, meta, ffmpeg, cache) + failMsg + lockMsg + shortMsg);
+                
+                uiStopwatch.Restart();
             };
 
-            var keyLocks = new ConcurrentDictionary<string, Lazy<SemaphoreSlim>>();
-            using var ffmpegIoThrottle = new SemaphoreSlim(cfg.FfmpegIoLimit, cfg.FfmpegIoLimit);
+            // -----------------------------------------------------------------------------------
+            // Stage 1: 純 I/O 檔案路徑收集
+            // -----------------------------------------------------------------------------------
+            progress.Report("🔍 [第一階段] 正在以純 I/O 全速建立檔案清單，請稍候...");
+            uiStopwatch.Restart();
 
-            var searchTask = Task.Run(async () =>
+            var allValidFiles = new List<string>();
+            
+            var enumOptions = new EnumerationOptions { 
+                IgnoreInaccessible = true, 
+                ReturnSpecialDirectories = false,
+                AttributesToSkip = FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint 
+            };
+
+            await Task.Run(() =>
             {
-                try
+                int dirsScanned = 0;
+                var scannedRealPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var targetDirs = new Queue<string>(paths);
+                const int MAX_DEPTH = 50;
+
+                while (targetDirs.Count > 0 && !ct.IsCancellationRequested)
                 {
-                    var targetDirs = new Queue<string>(paths);
-                    while (targetDirs.Count > 0 && !ct.IsCancellationRequested)
+                    string d = targetDirs.Dequeue();
+                    dirsScanned++;
+                    
+                    // 💡 第一階段：嚴格 5 秒更新一次探索進度
+                    if (uiStopwatch.ElapsedMilliseconds >= 5000) 
                     {
-                        string d = targetDirs.Dequeue();
-                        if (excludes.Any(ex => d.StartsWith(ex, StringComparison.OrdinalIgnoreCase))) continue;
+                        progress.Report($"🔍 [第一階段] 掃描中... 已探索 {dirsScanned} 個資料夾，找到 {statsFound} 個影片檔案");
+                        uiStopwatch.Restart();
+                    }
 
-                        if (includeSubDir)
-                        {
-                            try { foreach (var sub in Directory.EnumerateDirectories(d, "*", enumOptions)) targetDirs.Enqueue(sub); } catch { }
-                        }
+                    if (excludes.Any(ex => d.StartsWith(ex, StringComparison.OrdinalIgnoreCase))) continue;
 
-                        try
+                    string realPath = d;
+                    try { realPath = Path.GetFullPath(new DirectoryInfo(d).FullName); } catch { }
+
+                    if (!scannedRealPaths.Add(realPath)) continue; 
+
+                    int depth = realPath.Count(c => c == Path.DirectorySeparatorChar);
+                    if (depth > MAX_DEPTH) continue;
+
+                    if (includeSubDir)
+                    {
+                        try { foreach (var sub in Directory.EnumerateDirectories(d, "*", enumOptions)) targetDirs.Enqueue(sub); } catch { }
+                    }
+
+                    try
+                    {
+                        foreach (var file in Directory.EnumerateFiles(d, "*.*", enumOptions))
                         {
-                            foreach (var file in Directory.EnumerateFiles(d, "*.*", enumOptions))
+                            if (ct.IsCancellationRequested) break;
+
+                            string ext = Path.GetExtension(file);
+                            bool isSupported = false;
+                            for (int i = 0; i < AppConstants.SupportedVideoExts.Length; i++)
                             {
-                                if (ct.IsCancellationRequested) break;
-
-                                if (AppConstants.SupportedVideoExts.Any(ext => file.EndsWith(ext, StringComparison.OrdinalIgnoreCase)))
+                                if (string.Equals(ext, AppConstants.SupportedVideoExts[i], StringComparison.OrdinalIgnoreCase))
                                 {
-                                    var fi = new FileInfo(file);
-                                    if (fi.Length >= minSizeBytes)
-                                    {
-                                        if (FileHelper.IsFileInUse(file))
-                                        {
-                                            Interlocked.Increment(ref statsSkippedLocked);
-                                            long sz = 0;
-                                            try { sz = fi.Length; } catch {}
-                                            failedFilesBag.Add(new DupeFileItem { FilePath = file, Size = sz, IsFailed = true, ErrorMessage = Loc("ErrLocked", "被鎖定 (下載中/使用中)") });
-                                            continue;
-                                        }
+                                    isSupported = true;
+                                    break;
+                                }
+                            }
 
-                                        Interlocked.Increment(ref statsFound);
-                                        await fileChannel.Writer.WriteAsync(file, ct);
+                            if (isSupported)
+                            {
+                                var fi = new FileInfo(file);
+                                if (fi.Length >= minSizeBytes)
+                                {
+                                    allValidFiles.Add(file);
+                                    statsFound++;
+                                    
+                                    // 💡 第一階段：嚴格 5 秒更新一次發現數量
+                                    if (uiStopwatch.ElapsedMilliseconds >= 5000)
+                                    {
+                                        progress.Report($"🔍 [第一階段] 已尋找到 {statsFound} 個影片檔案...");
+                                        uiStopwatch.Restart();
                                     }
                                 }
                             }
                         }
-                        catch { }
                     }
+                    catch { }
                 }
-                catch (OperationCanceledException) { }
-                finally { fileChannel.Writer.Complete(); }
             }, ct);
+
+            ct.ThrowIfCancellationRequested();
+            
+            // 強制過渡階段必須更新 UI
+            progress.Report($"✅ [第一階段完成] 共找到 {statsFound} 個檔案，正在啟動解析引擎...");
+            uiStopwatch.Restart();
+            
+            await Task.Delay(200, ct);
+
+            progress.Report("🗂️ 正在進行實體路徑排序以最佳化 HDD 讀取軌跡...");
+            allValidFiles.Sort(StringComparer.OrdinalIgnoreCase);
+            uiStopwatch.Restart();
+
+            // -----------------------------------------------------------------------------------
+            // Stage 2: Metadata 解析與 FFmpeg 萃取 (非同步管線)
+            // -----------------------------------------------------------------------------------
+            var metadataChannel = Channel.CreateBounded<DupeFileItem>(new BoundedChannelOptions(cfg.MetadataBuffer) { FullMode = BoundedChannelFullMode.Wait });
+            var keyLocks = new ConcurrentDictionary<string, Lazy<SemaphoreSlim>>();
+            using var ffmpegIoThrottle = new SemaphoreSlim(cfg.FfmpegIoLimit, cfg.FfmpegIoLimit);
 
             var metadataTask = Task.Run(async () =>
             {
                 try
                 {
-                    await Parallel.ForEachAsync(fileChannel.Reader.ReadAllAsync(ct), new ParallelOptions { MaxDegreeOfParallelism = cfg.MetadataParallelism, CancellationToken = ct }, async (file, token) =>
+                    await Parallel.ForEachAsync(allValidFiles, new ParallelOptions { MaxDegreeOfParallelism = cfg.MetadataParallelism, CancellationToken = ct }, async (file, token) =>
                     {
                         long sz = 0;
                         try { sz = new FileInfo(file).Length; } catch { return; }
 
-                        string cacheKey = $"{sz}_{FileHelper.GetFileHeaderHash(file)}_v2";
+                        if (FileHelper.IsFileInUse(file))
+                        {
+                            Interlocked.Increment(ref statsSkippedLocked);
+                            failedFilesBag.Add(new DupeFileItem { FilePath = file, Size = sz, IsFailed = true, ErrorMessage = Loc("ErrLocked", "被鎖定 (下載中/使用中)") });
+                            return;
+                        }
+
+                        string cacheKey = $"{sz}_{FileHelper.GetFileHeaderHash(file)}_v3";
 
                         if (_badCache.ContainsKey(cacheKey))
                         {
@@ -728,28 +793,54 @@ namespace FastDupeFinder
                             Interlocked.Increment(ref statsExtractFailed);
                             
                             int c1 = Interlocked.Increment(ref statsMetaProcessed);
-                            if (c1 % 100 == 0) ReportProg(statsFound, c1, statsFfmpegProcessed, statsCacheHits, statsExtractFailed, statsSkippedLocked, statsSkippedShort);
+                            ReportProg(statsFound, c1, statsFfmpegProcessed, statsCacheHits, statsExtractFailed, statsSkippedLocked, statsSkippedShort); // 💡 全權交給 ReportProg 的 5秒閥門處理
                             return;
                         }
 
                         bool isCached = _fingerprintCache.TryGetValue(cacheKey, out var cachedFps);
-                        var item = await FileHelper.ExtractMetadataAsync(file, token, skipFfmpegFallback: isCached);
+                        
+                        DupeFileItem item;
+                        if (isCached && cachedFps != null && cachedFps.Count > 0)
+                        {
+                            var tailFp = cachedFps.FirstOrDefault(f => f.Position == FingerprintPosition.Tail);
+                            var headFp = cachedFps.FirstOrDefault(f => f.Position == FingerprintPosition.Head);
+                            double duration = 300; 
+                            if (tailFp != null) duration = tailFp.TimeSec + 100;
+                            else if (headFp != null) duration = Math.Max(headFp.TimeSec, 100);
+                            
+                            item = new DupeFileItem 
+                            { 
+                                FilePath = file, 
+                                Size = sz, 
+                                CacheKey = cacheKey,
+                                Duration = TimeSpan.FromSeconds(duration),
+                                HitCache = true
+                            };
+                            lock (item.Fingerprints) { item.Fingerprints.AddRange(cachedFps); }
+                            Interlocked.Increment(ref statsCacheHits);
+                        }
+                        else
+                        {
+                            var extractedItem = await FileHelper.ExtractMetadataAsync(file, token, skipFfmpegFallback: false);
+                            if (extractedItem == null)
+                            {
+                                string ext = Path.GetExtension(file).ToLower();
+                                if (AppConstants.LegacyVideoExts.Contains(ext)) {
+                                    failedFilesBag.Add(new DupeFileItem { FilePath = file, Size = sz, IsFailed = true, IsFormatUpgradeNeeded = true, ErrorMessage = Loc("ErrLegacyFormat", "⚠️ 老舊格式 (需升級才能解析)") });
+                                } else {
+                                    failedFilesBag.Add(new DupeFileItem { FilePath = file, Size = sz, IsFailed = true, ErrorMessage = Loc("ErrHeaderBad", "標頭損壞 (無法解析長度)") });
+                                }
+                                Interlocked.Increment(ref statsExtractFailed);
+                                int c1 = Interlocked.Increment(ref statsMetaProcessed);
+                                ReportProg(statsFound, c1, statsFfmpegProcessed, statsCacheHits, statsExtractFailed, statsSkippedLocked, statsSkippedShort);
+                                return;
+                            }
+                            item = extractedItem;
+                        }
 
                         if (item != null)
                         {
-                            item.CacheKey = cacheKey; 
-                            
-                            if (isCached && item.Duration.TotalSeconds <= 1 && cachedFps != null)
-                            {
-                                var tailFp = cachedFps.FirstOrDefault(f => f.Position == FingerprintPosition.Tail);
-                                if (tailFp != null) {
-                                    item.Duration = TimeSpan.FromSeconds(tailFp.TimeSec + 100);
-                                } else {
-                                    var headFp = cachedFps.FirstOrDefault(f => f.Position == FingerprintPosition.Head);
-                                    if (headFp != null) item.Duration = TimeSpan.FromSeconds(Math.Max(headFp.TimeSec, 100));
-                                    else item.Duration = TimeSpan.FromSeconds(minLengthSec + 1); 
-                                }
-                            }
+                            item.CacheKey = cacheKey;
 
                             if (item.Duration.TotalSeconds >= minLengthSec || isCached)
                             {
@@ -757,19 +848,9 @@ namespace FastDupeFinder
                             }
                             else Interlocked.Increment(ref statsSkippedShort);
                         }
-                        else
-                        {
-                            string ext = Path.GetExtension(file).ToLower();
-                            if (AppConstants.LegacyVideoExts.Contains(ext)) {
-                                failedFilesBag.Add(new DupeFileItem { FilePath = file, Size = sz, IsFailed = true, IsFormatUpgradeNeeded = true, ErrorMessage = Loc("ErrLegacyFormat", "⚠️ 老舊格式 (需升級才能解析)") });
-                            } else {
-                                failedFilesBag.Add(new DupeFileItem { FilePath = file, Size = sz, IsFailed = true, ErrorMessage = Loc("ErrHeaderBad", "標頭損壞 (無法解析長度)") });
-                            }
-                            Interlocked.Increment(ref statsExtractFailed);
-                        }
 
                         int current = Interlocked.Increment(ref statsMetaProcessed);
-                        if (current % 100 == 0) ReportProg(statsFound, current, statsFfmpegProcessed, statsCacheHits, statsExtractFailed, statsSkippedLocked, statsSkippedShort);
+                        ReportProg(statsFound, current, statsFfmpegProcessed, statsCacheHits, statsExtractFailed, statsSkippedLocked, statsSkippedShort);
                     });
                 }
                 catch (OperationCanceledException) { }
@@ -780,7 +861,9 @@ namespace FastDupeFinder
             {
                 try
                 {
-                    await Parallel.ForEachAsync(metadataChannel.Reader.ReadAllAsync(ct), new ParallelOptions { MaxDegreeOfParallelism = cfg.PipelineSlots, CancellationToken = ct }, async (item, token) =>
+                    int ffmpegParallelism = cfg.IsSsd ? cfg.PipelineSlots : cfg.FfmpegIoLimit * 2;
+                    
+                    await Parallel.ForEachAsync(metadataChannel.Reader.ReadAllAsync(ct), new ParallelOptions { MaxDegreeOfParallelism = ffmpegParallelism, CancellationToken = ct }, async (item, token) =>
                     {
                         if (FileHelper.IsFileBadOrDownloading(item.FilePath))
                         {
@@ -789,6 +872,14 @@ namespace FastDupeFinder
                             failedFilesBag.Add(item);
                             Interlocked.Increment(ref statsSkippedLocked);
                             return; 
+                        }
+
+                        if (item.HitCache && item.Fingerprints.Count > 0)
+                        {
+                            finalResultsBag.Add(item);
+                            int ffmpegCurrent = Interlocked.Increment(ref statsFfmpegProcessed);
+                            ReportProg(statsFound, statsMetaProcessed, ffmpegCurrent, statsCacheHits, statsExtractFailed, statsSkippedLocked, statsSkippedShort);
+                            return;
                         }
 
                         string cacheKey = item.CacheKey; 
@@ -805,8 +896,7 @@ namespace FastDupeFinder
                         if (_fingerprintCache.TryGetValue(cacheKey, out var cachedFingerprints))
                         {
                             lock (item.Fingerprints) { item.Fingerprints.AddRange(cachedFingerprints); }
-                            item.HitCache = true; 
-                            Interlocked.Increment(ref statsCacheHits);
+                            item.HitCache = true;
                         }
                         else
                         {
@@ -818,8 +908,7 @@ namespace FastDupeFinder
                                 if (_fingerprintCache.TryGetValue(cacheKey, out var lateCachedFingerprints))
                                 {
                                     lock (item.Fingerprints) { item.Fingerprints.AddRange(lateCachedFingerprints); }
-                                    item.HitCache = true; 
-                                    Interlocked.Increment(ref statsCacheHits);
+                                    item.HitCache = true;
                                 }
                                 else
                                 {
@@ -853,51 +942,51 @@ namespace FastDupeFinder
                         if (item.Fingerprints.Count > 0) finalResultsBag.Add(item);
 
                         int current = Interlocked.Increment(ref statsFfmpegProcessed);
-                        if (current % 20 == 0 || item.HitCache)
-                        {
-                            ReportProg(statsFound, statsMetaProcessed, current, statsCacheHits, statsExtractFailed, statsSkippedLocked, statsSkippedShort);
-                        }
+                        ReportProg(statsFound, statsMetaProcessed, current, statsCacheHits, statsExtractFailed, statsSkippedLocked, statsSkippedShort);
                     });
                 }
                 catch (OperationCanceledException) { }
             }, ct);
 
-            try { await Task.WhenAll(searchTask, metadataTask, ffmpegTask); }
+            try { await Task.WhenAll(metadataTask, ffmpegTask); }
             catch (OperationCanceledException) { }
 
             ct.ThrowIfCancellationRequested();
 
+            // 確保不管節流閥狀態如何，完成時一定要顯示最終統計
             string finalFailMsg = statsExtractFailed > 0 ? string.Format(Loc("ProgFinalFail", "，⚠️ {0} 檔損壞"), statsExtractFailed) : "";
             string finalLockMsg = statsSkippedLocked > 0 ? string.Format(Loc("ProgFinalLock", "，🔒 跳過 {0} 個下載中/被鎖定檔案"), statsSkippedLocked) : "";
             string finalShortMsg = statsSkippedShort > 0 ? string.Format(Loc("ProgFinalShort", "，⏭️ 略過 {0} 個過短檔案"), statsSkippedShort) : "";
             progress.Report(string.Format(Loc("ProgDone", "⚡ [管線完成] 總計處理 {0} 檔，快取命中 {1} 次{2}{3}{4}。正在進行特徵比對..."), statsFfmpegProcessed, statsCacheHits, finalFailMsg, finalLockMsg, finalShortMsg));
+            uiStopwatch.Restart();
 
             var suspectFiles = finalResultsBag.ToList();
             
-            // Phase 1: 基本比對分群 (使用 100 秒特徵)
+            // Phase 1: 基本比對分群
             var phase1Groups = await Task.Run(() => ScanEngine.GroupFiles(suspectFiles));
 
-            progress.Report(Loc("ProgPhase2", "🔬 正在執行 200秒 深度特徵比對 (攔截誤判)..."));
+            progress.Report(Loc("ProgPhase2", "🔬 正在執行 200秒 深度特徵比對 (攔截系列影片誤判)..."));
+            uiStopwatch.Restart();
             
-            // Phase 2: 深度二次分析 (攔截大群組進行破局)
-            var finalResults = await RefineGroupsAsync(phase1Groups, ct, ffmpegTimeoutMs, ffmpegIoThrottle);
+            // Phase 2: 深度二次分析 (攔截大群組進行防誤判拆分)
+            var finalFlatList = await RefineGroupsAsync(phase1Groups, ct, ffmpegTimeoutMs, ffmpegIoThrottle, keyLocks);
 
-            finalResults.AddRange(failedFilesBag);
+            finalFlatList.AddRange(failedFilesBag);
 
-            return finalResults;
+            return finalFlatList;
         }
 
         // =========================================================================================
-        // 💡 Phase 2：極速 200秒二次分析 (解決 OP/ED 重複誤判，短片直接相容保留)
+        // 💡 Phase 2：極速深度分析 (解決系列影片/相同 OP/ED 重複誤判)
         // =========================================================================================
-        private async Task<List<DupeFileItem>> RefineGroupsAsync(List<List<DupeFileItem>> groups, CancellationToken ct, int timeoutMs, SemaphoreSlim ioThrottle)
+        private async Task<List<DupeFileItem>> RefineGroupsAsync(List<List<DupeFileItem>> groups, CancellationToken ct, int timeoutMs, SemaphoreSlim ioThrottle, ConcurrentDictionary<string, Lazy<SemaphoreSlim>> keyLocks)
         {
             var finalFlatList = new List<DupeFileItem>();
             int displayGroupId = 1;
 
             foreach (var group in groups)
             {
-                if (group.Count >= 4)
+                if (group.Count > 3) // 💡 只有群組數量大於 3，才啟動防禦誤判的 Phase 2
                 {
                     var tasks = group.Select(async item =>
                     {
@@ -905,19 +994,44 @@ namespace FastDupeFinder
                         {
                             bool hasDeepScan;
                             lock (item.Fingerprints) {
-                                hasDeepScan = item.Fingerprints.Any(f => Math.Abs(f.TimeSec - 200) < 5 || Math.Abs((item.Duration.TotalSeconds - f.TimeSec) - 200) < 5);
+                                hasDeepScan = item.Fingerprints.Any(f => f.Position == FingerprintPosition.Deep && Math.Abs(f.TimeSec - 200) < 5);
                             }
                             
                             if (!hasDeepScan)
                             {
-                                await ioThrottle.WaitAsync(ct);
-                                try { await FFmpegHelper.ExtractCombinedFingerprintsAsync(item, 200, item.Duration.TotalSeconds - 200, ct, timeoutMs); }
-                                finally { ioThrottle.Release(); }
-                                
-                                string cacheKey = item.CacheKey;
-                                List<VideoFingerprint> copiedFps;
-                                lock (item.Fingerprints) { copiedFps = item.Fingerprints.ToList(); }
-                                _fingerprintCache[cacheKey] = copiedFps;
+                                var myLock = keyLocks.GetOrAdd(item.CacheKey, _ => new Lazy<SemaphoreSlim>(() => new SemaphoreSlim(1, 1))).Value;
+                                await myLock.WaitAsync(ct);
+                                try
+                                {
+                                    if (_fingerprintCache.TryGetValue(item.CacheKey, out var lateCache))
+                                    {
+                                        var cachedDeepFp = lateCache.FirstOrDefault(f => f.Position == FingerprintPosition.Deep && Math.Abs(f.TimeSec - 200) < 5);
+                                        if (cachedDeepFp != null)
+                                        {
+                                            lock (item.Fingerprints)
+                                            {
+                                                var myFp = item.Fingerprints.FirstOrDefault(f => f.Position == FingerprintPosition.Deep);
+                                                if (myFp != null) {
+                                                    myFp.Hashes = cachedDeepFp.Hashes;
+                                                    myFp.TimeSec = cachedDeepFp.TimeSec;
+                                                } else {
+                                                    item.Fingerprints.Add(new VideoFingerprint(cachedDeepFp.Hashes, cachedDeepFp.TimeSec, FingerprintPosition.Deep));
+                                                }
+                                            }
+                                            hasDeepScan = true; 
+                                        }
+                                    }
+                                    
+                                    if (!hasDeepScan)
+                                    {
+                                        await ioThrottle.WaitAsync(ct);
+                                        try { await FFmpegHelper.ExtractDeepFingerprintAsync(item, 200, ct, timeoutMs); }
+                                        finally { ioThrottle.Release(); }
+                                        
+                                        lock (item.Fingerprints) { _fingerprintCache[item.CacheKey] = item.Fingerprints.ToList(); }
+                                    }
+                                }
+                                finally { myLock.Release(); }
                             }
                         }
                     }).ToList();
@@ -930,7 +1044,7 @@ namespace FastDupeFinder
                     {
                         bool hasDeep = false;
                         lock(item.Fingerprints) {
-                            hasDeep = item.Fingerprints.Any(f => Math.Abs(f.TimeSec - 200) < 5 || Math.Abs((item.Duration.TotalSeconds - f.TimeSec) - 200) < 5);
+                            hasDeep = item.Fingerprints.Any(f => f.Position == FingerprintPosition.Deep);
                         }
                         if (hasDeep) longs.Add(item);
                         else shorts.Add(item);
@@ -942,12 +1056,16 @@ namespace FastDupeFinder
                         if (refinedLongGroups.Count > 0)
                         {
                             var mainGroup = refinedLongGroups.OrderByDescending(g => g.Count).First();
-                            mainGroup.AddRange(shorts);
+                            mainGroup.AddRange(shorts); 
                             
                             foreach (var rg in refinedLongGroups)
                             {
                                 if (rg.Count >= 2) finalFlatList.AddRange(ScanEngine.AssignGroupMetadata(rg, displayGroupId++, isPhase2: true));
                             }
+                        }
+                        else if (shorts.Count >= 2) 
+                        {
+                            finalFlatList.AddRange(ScanEngine.AssignGroupMetadata(shorts, displayGroupId++, isPhase2: false));
                         }
                     }
                     else finalFlatList.AddRange(ScanEngine.AssignGroupMetadata(group, displayGroupId++, isPhase2: false));
@@ -1139,6 +1257,7 @@ namespace FastDupeFinder
 
             int successCount = 0;
             var deletedItems = new List<DupeFileItem>();
+            var uiStopwatch = Stopwatch.StartNew(); // 💡 刪除功能也套用 5秒 UI 節流閥
 
             await Task.Run(() =>
             {
@@ -1152,11 +1271,12 @@ namespace FastDupeFinder
                     }
                     processed++;
                     
-                    if (processed % 10 == 0 || processed == selectedItems.Count)
+                    if (uiStopwatch.ElapsedMilliseconds >= 5000 || processed == selectedItems.Count)
                     {
                         Application.Current.Dispatcher.InvokeAsync(() => {
                             StatusText.Text = string.Format(Loc("StatusDeletingProgress", "🗑️ 正在刪除檔案... ({0}/{1})"), processed, selectedItems.Count);
                         });
+                        uiStopwatch.Restart();
                     }
                 }
             });
