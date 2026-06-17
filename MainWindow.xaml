@@ -46,8 +46,9 @@
                         <TextBlock Grid.Row="0" Grid.Column="5" Text="{local:Loc LblMinSize, '最小檔案 (MB):'}" VerticalAlignment="Center" Margin="0,0,5,5"/>
                         <TextBox x:Name="MinSizeTextBox" Grid.Row="0" Grid.Column="6" Text="100" Width="40" VerticalAlignment="Center" Margin="0,0,15,5"/>
                         
-                        <TextBlock Grid.Row="0" Grid.Column="7" Text="{local:Loc LblMinLen, '最短長度 (分):'}" VerticalAlignment="Center" Margin="0,0,5,5"/>
-                        <TextBox x:Name="MinLengthTextBox" Grid.Row="0" Grid.Column="8" Text="5" Width="30" VerticalAlignment="Center" Margin="0,0,5,5"/>
+                        <!-- 💡 在這裡將顯示文字修正為 秒，預設值改為 3 -->
+                        <TextBlock Grid.Row="0" Grid.Column="7" Text="{local:Loc LblMinLen, '最短長度 (秒):'}" VerticalAlignment="Center" Margin="0,0,5,5"/>
+                        <TextBox x:Name="MinLengthTextBox" Grid.Row="0" Grid.Column="8" Text="3" Width="30" VerticalAlignment="Center" Margin="0,0,5,5"/>
 
                         <!-- 第二行：排除目錄設定 -->
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="{local:Loc LblExclude, '排除目錄:'}" VerticalAlignment="Center" Margin="0,0,5,0" Foreground="DarkRed"/>
@@ -122,8 +123,9 @@
         <Border Grid.Column="2" Margin="10" BorderBrush="Gray" BorderThickness="1">
             <Grid>
                 <TextBlock x:Name="PreviewHintText" Text="{local:Loc TxtNoFile, '尚未選擇檔案'}" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="Gray"/>
+                
+                <!-- 💡 移除廢棄的 MediaElement (PreviewVideo)，僅保留圖片和文字預覽容器 -->
                 <Image x:Name="PreviewImage" Stretch="Uniform" Visibility="Collapsed"/>
-                <MediaElement x:Name="PreviewVideo" LoadedBehavior="Manual" UnloadedBehavior="Close" Stretch="Uniform" ScrubbingEnabled="True" Visibility="Collapsed" Volume="0"/>
                 <TextBox x:Name="PreviewText" IsReadOnly="True" VerticalScrollBarVisibility="Auto" Visibility="Collapsed" BorderThickness="0" Margin="5"/>
                 
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom" HorizontalAlignment="Right" Margin="10">

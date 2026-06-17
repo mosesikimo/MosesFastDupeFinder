@@ -203,7 +203,7 @@ namespace FastDupeFinder
             {"BtnClear", "Clear"},
             {"ChkSubDir", "Include Subdirectories"},
             {"LblMinSize", "Min Size (MB):"},
-            {"LblMinLen", "Min Length (min):"},
+            {"LblMinLen", "Min Length (sec):"},
             {"LblExclude", "Exclude Paths:"},
             {"TipExclude", "Paths to ignore (e.g. C:\\Windows)"},
             {"BtnAddExclude", "Add Exclude"},
